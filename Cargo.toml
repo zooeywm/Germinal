@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/domain",
+  "crates/ports",
+  "crates/application",
+  "crates/infra",
+  "app",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/zooeywm/germinal"
+authors = ["zooeywm <zooeywm@gmail.com>"]
+
+[workspace.dependencies]
+germinal-domain = { path = "crates/domain" }
+germinal-ports = { path = "crates/ports" }
+germinal-application = { path = "crates/application" }
+germinal-infra = { path = "crates/infra" }
+
+compio = { version = "0.19", default-features = false, features = ["io-uring"] }
+kudi = "0.1"

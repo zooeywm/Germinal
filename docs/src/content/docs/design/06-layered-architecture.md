@@ -413,6 +413,38 @@ GNativeSDK / DSL
 
 它不是宿主五层架构里的额外一层，而是与宿主并行的 app authoring/runtime 体系。
 
+### 推荐 transport 分层
+
+本地模式下，`RenderCommand` 与资源不应共用一条“全塞进 PTY”的链路。推荐拆成：
+
+```txt
+PTY
+  -> 启动 shell
+  -> 启动 GNativeApp
+  -> enter-native-app-mode / exit-native-app-mode 握手
+
+Command transport
+  -> RenderCommand frame
+  -> 小型 resource metadata
+
+Resource transport
+  -> 图片像素
+  -> 视频帧
+  -> 离屏 surface
+```
+
+推荐实现顺序：
+
+1. 本地 MVP：`Unix domain socket` 传 RenderCommand 和小型资源消息。
+2. 后续增强：大资源改为 `shared memory / memfd`，命令里只保留 `resource_id` 引用。
+3. 远程扩展：延续同样边界，把 `RenderCommand frame` 和资源更新映射到远程 transport。
+
+这样可以保证：
+
+- PTY 继续只负责传统终端兼容和模式切换入口。
+- RenderCommand 成为清晰的 renderer/compositor 输入边界。
+- 纹理、视频帧等大对象不被迫重复序列化进每一帧命令里。
+
 ## 推荐 workspace 结构
 
 ```txt

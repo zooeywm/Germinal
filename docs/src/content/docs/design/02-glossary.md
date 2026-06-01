@@ -213,6 +213,19 @@ AppLayout 负责计算 UiNode 的几何位置、尺寸和约束结果。
 
 RenderCommand 是 GNativeApp 输出到 GShell renderer/compositor 的渲染 IR 和协议边界，不是底层 GPU 命令对象。
 
+### RenderCommand Transport
+
+RenderCommand 的传输链路。
+
+在本地模式下，推荐由 GNativeApp 先通过 PTY / GShellProtocol 显式请求进入 GNativeAppMode，再建立专用 transport 发送 RenderCommand 帧。
+
+推荐约束是：
+
+- PTY 只负责 shell 兼容、启动入口和模式切换握手。
+- RenderCommand 走独立命令通道，不长期混在 PTY 文本流里。
+- 大资源不直接塞进 RenderCommand，而是通过 `resource_id` 被命令引用。
+- GShell renderer/compositor 消费 RenderCommand 和资源更新后，再生成 PaneLayer。
+
 ### GNativeApp Rendering Path
 
 GNativeApp 的一帧输出主链路：
@@ -222,6 +235,7 @@ DSL / GNativeSDK
 -> UiTree
 -> AppLayout
 -> RenderCommand
+-> transport
 -> GShell renderer/compositor
 -> PaneLayer
 ```

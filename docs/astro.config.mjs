@@ -14,7 +14,7 @@ export default defineConfig({
       sidebar: [
         {
           label: "Design Documents",
-          collapsed: true,
+          collapsed: false,
           items: [{ autogenerate: { directory: "design" } }],
         },
       ],

@@ -57,7 +57,7 @@ PtyMode | GNativeAppMode
 
 同一时刻一个 GShell 只能处于一种模式。
 
-进入 GNativeAppMode 必须由 GShellProtocol 显式触发。
+进入 GNativeAppMode 必须由 GNativeProtocol 显式触发。
 
 退出 GNativeAppMode 后必须返回 PtyMode。
 
@@ -239,7 +239,7 @@ Window
 
 ```text
 PtyHost 中运行 GNativeApp
--> GShellProtocol enter-native-app-mode
+-> GNativeProtocol enter-native-app-mode
 -> GNativeAppMode
 -> GNativeSDK / DSL
 -> UiTree

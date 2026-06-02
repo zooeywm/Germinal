@@ -150,7 +150,7 @@ PtyHost
 GShellMode
 PtyMode
 GNativeAppMode
-GShellProtocol
+GNativeProtocol
 GNativeAppInstance
 ```
 
@@ -232,7 +232,7 @@ GShell.stop()
 一个 GShell 默认持有一个 PtyHost
 一个 GShell 默认处于 PtyMode
 一个 GShell 同一时刻只能处于一种 GShellMode
-GNativeAppMode 必须由 GShellProtocol 显式进入
+GNativeAppMode 必须由 GNativeProtocol 显式进入
 GNativeAppMode 退出后必须返回 PtyMode
 GShell 不做智能识别
 PtyHost 与 GNativeAppInstance 内部状态互相隔离
@@ -297,14 +297,14 @@ PtyHost 不产生 UiTree
 PtyHost 输出 TerminalBuffer
 PtyMode 渲染边界是 TerminalRenderBatch
 PtyHost 是 GShell 默认兼容能力
-PtyHost 可以接收 GShellProtocol 消息
+PtyHost 可以接收 GNativeProtocol 消息
 ```
 
 ---
 
-### 4.5 GShellProtocol Model
+### 4.5 GNativeProtocol Model
 
-GShellProtocol 是 GShell 与支持 Germinal 协议的应用之间的显式控制协议。
+GNativeProtocol 是 GShell 与支持 Germinal 协议的应用之间的显式控制协议。
 
 #### Value Objects
 
@@ -328,9 +328,9 @@ AppError
 #### 领域行为
 
 ```text
-GShellProtocol.parse(bytes)
-GShellProtocol.validate(message)
-GShellProtocol.to_domain_event(message)
+GNativeProtocol.parse(bytes)
+GNativeProtocol.validate(message)
+GNativeProtocol.to_domain_event(message)
 ```
 
 #### 领域规则

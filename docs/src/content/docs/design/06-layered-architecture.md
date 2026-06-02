@@ -401,7 +401,7 @@ GNativeSDK / DSL
 -> UiTree
 -> AppLayout
 -> RenderCommand
--> GShellProtocol / transport
+-> GNativeProtocol / transport
 ```
 
 这条链路的职责分工是：

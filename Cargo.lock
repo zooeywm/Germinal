@@ -3,5 +3,37 @@
 version = 4
 
 [[package]]
+name = "germinal"
+version = "0.0.1"
+dependencies = [
+ "germinal-application",
+ "germinal-domain",
+ "germinal-infra",
+]
+
+[[package]]
+name = "germinal-application"
+version = "0.0.1"
+dependencies = [
+ "germinal-domain",
+ "germinal-ports",
+]
+
+[[package]]
 name = "germinal-domain"
 version = "0.0.1"
+
+[[package]]
+name = "germinal-infra"
+version = "0.0.1"
+dependencies = [
+ "germinal-domain",
+ "germinal-ports",
+]
+
+[[package]]
+name = "germinal-ports"
+version = "0.0.1"
+dependencies = [
+ "germinal-domain",
+]

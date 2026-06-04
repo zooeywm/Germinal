@@ -1,3 +1,2 @@
 pub mod gshell;
 pub mod rendering;
-pub mod workspace;

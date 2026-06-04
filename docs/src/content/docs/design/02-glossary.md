@@ -79,7 +79,7 @@ PtyHost 用于运行传统 Shell、CLI 和 TUI 程序。
 
 PtyHost 不输出结构化 UiTree，而是输出传统终端状态。
 
-PtyHost 在 GShell 生命周期内默认存在，用于提供传统终端兼容能力。
+PtyHost 在 GShell 生命周期内默认存在，用于提供完整 PTY 运行时能力。
 
 ### TerminalBuffer
 

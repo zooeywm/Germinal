@@ -360,7 +360,7 @@ Window
 -> GPUFrame
 ```
 
-该闭环完成后，Germinal 才具备传统终端兼容基础。
+该闭环完成后，Germinal 才具备完整 PTY 运行时基础。
 
 随后再实现：
 

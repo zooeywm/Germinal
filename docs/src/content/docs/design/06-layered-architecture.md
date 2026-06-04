@@ -441,7 +441,7 @@ Resource transport
 
 这样可以保证：
 
-- PTY 继续只负责传统终端兼容和模式切换入口。
+- PTY 继续负责完整传统终端运行时能力，以及模式切换入口。
 - RenderCommand 成为清晰的 renderer/compositor 输入边界。
 - 纹理、视频帧等大对象不被迫重复序列化进每一帧命令里。
 

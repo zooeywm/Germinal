@@ -12,45 +12,6 @@ pub struct RunningGShell {
     pub pty: PtyHandle,
 }
 
-/// Starts a GShell in PtyMode and binds it to a real PTY resource.
-///
-/// The GShell identity is provided by the caller.
-/// The actual PTY/ConPTY resource is created through PtyPort.
-pub fn start_pty_gshell(pty_port: &mut impl PtyPort, id: GShellId) -> PtyResult<RunningGShell> {
-    let shell = GShell::new(id);
-    let pty = pty_port.spawn()?;
-
-    Ok(RunningGShell { shell, pty })
-}
-
-/// Writes input bytes to the PTY bound to this running GShell.
-pub fn write_pty_input(
-    pty_port: &mut impl PtyPort,
-    running: &RunningGShell,
-    bytes: &[u8],
-) -> PtyResult<()> {
-    pty_port.write(&running.pty, bytes)
-}
-
-/// Reads output bytes from the PTY bound to this running GShell.
-pub fn read_pty_output(pty_port: &mut impl PtyPort, running: &RunningGShell) -> PtyResult<Vec<u8>> {
-    pty_port.read(&running.pty)
-}
-
-/// Resizes the PTY bound to this running GShell.
-pub fn resize_pty(
-    pty_port: &mut impl PtyPort,
-    running: &RunningGShell,
-    size: PtySize,
-) -> PtyResult<()> {
-    pty_port.resize(&running.pty, size)
-}
-
-/// Closes the PTY bound to this running GShell.
-pub fn close_pty_gshell(pty_port: &mut impl PtyPort, running: RunningGShell) -> PtyResult<()> {
-    pty_port.close(running.pty)
-}
-
 /// Switches the running GShell to GNativeMode.
 ///
 /// This only changes domain state.
@@ -65,4 +26,43 @@ pub fn enter_gnative_mode(running: &mut RunningGShell) {
 /// Real GNativeApp cleanup is handled separately by application/infra.
 pub fn exit_gnative_mode(running: &mut RunningGShell) {
     running.shell.exit_gnative();
+}
+
+/// Starts a GShell in PtyMode through a PTY port.
+pub fn start_pty_gshell(pty_port: &mut impl PtyPort, id: GShellId) -> PtyResult<RunningGShell> {
+    let shell = GShell::new(id);
+    let pty = pty_port.spawn()?;
+
+    Ok(RunningGShell { shell, pty })
+}
+
+/// Writes input bytes to the PTY bound to this running GShell.
+pub async fn write_pty_input_async(
+    pty_port: &mut impl PtyPort,
+    running: &RunningGShell,
+    bytes: &[u8],
+) -> PtyResult<()> {
+    pty_port.write(&running.pty, bytes).await
+}
+
+/// Reads output bytes from the PTY bound to this running GShell.
+pub async fn read_pty_output_async(
+    pty_port: &mut impl PtyPort,
+    running: &RunningGShell,
+) -> PtyResult<Vec<u8>> {
+    pty_port.read(&running.pty).await
+}
+
+/// Resizes the PTY bound to this running GShell.
+pub fn resize_pty(
+    pty_port: &mut impl PtyPort,
+    running: &RunningGShell,
+    size: PtySize,
+) -> PtyResult<()> {
+    pty_port.resize(&running.pty, size)
+}
+
+/// Closes the PTY bound to this running GShell.
+pub fn close_pty_gshell(pty_port: &mut impl PtyPort, running: RunningGShell) -> PtyResult<()> {
+    pty_port.close(running.pty)
 }

@@ -7,9 +7,12 @@ use std::process::{Child, Command};
 use germinal_ports::pty::{PtyError, PtyHandle, PtyPort, PtyResult, PtySize};
 use rustix::fd::OwnedFd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
-use rustix::io::{Errno, read, write};
 use rustix::termios::{Winsize, tcsetwinsize};
 use rustix_openpty::{login_tty, openpty};
+
+use compio::buf::BufResult;
+use compio::io::{AsyncRead, AsyncWrite};
+use compio::runtime::fd::AsyncFd;
 
 /// Unix PTY implementation.
 ///
@@ -40,7 +43,7 @@ impl Default for UnixPty {
 /// controller is the terminal-emulator side kept by Germinal.
 /// The user side is handed to the child process during spawn.
 struct UnixPtySession {
-    pty_controller: OwnedFd,
+    pty_controller: AsyncFd<OwnedFd>,
     child: Child,
 }
 
@@ -61,6 +64,8 @@ impl PtyPort for UnixPty {
         let flags = fcntl_getfl(&pty_controller).map_err(|_| PtyError::SpawnFailed)?;
         fcntl_setfl(&pty_controller, flags | OFlags::NONBLOCK)
             .map_err(|_| PtyError::SpawnFailed)?;
+
+        let pty_controller = AsyncFd::new(pty_controller).map_err(|_| PtyError::SpawnFailed)?;
 
         // Drop the parent-owned user side. The child gets its own cloned fd.
         drop(pty.user);
@@ -102,29 +107,29 @@ impl PtyPort for UnixPty {
         Ok(PtyHandle::new(id))
     }
 
-    fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) -> PtyResult<()> {
+    async fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) -> PtyResult<()> {
         let id = handle.id();
-        let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
+        let session = self.sessions.get_mut(&id).ok_or(PtyError::UnknownHandle)?;
 
-        write(&session.pty_controller, bytes).map_err(|_| PtyError::IoFailed)?;
+        let buffer = bytes.to_vec();
+        let BufResult(result, _buffer) = session.pty_controller.write(buffer).await;
+
+        result.map_err(|_| PtyError::IoFailed)?;
 
         Ok(())
     }
 
-    fn read(&mut self, handle: &PtyHandle) -> PtyResult<Vec<u8>> {
+    async fn read(&mut self, handle: &PtyHandle) -> PtyResult<Vec<u8>> {
         let id = handle.id();
-        let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
+        let session = self.sessions.get_mut(&id).ok_or(PtyError::UnknownHandle)?;
 
-        let mut buffer = vec![0; 4096];
+        let buffer = vec![0; 4096];
+        let BufResult(result, mut buffer) = session.pty_controller.read(buffer).await;
 
-        match read(&session.pty_controller, &mut buffer) {
-            Ok(read_len) => {
-                buffer.truncate(read_len);
-                Ok(buffer)
-            }
-            Err(Errno::AGAIN) => Ok(Vec::new()),
-            Err(_) => Err(PtyError::IoFailed),
-        }
+        let read_len = result.map_err(|_| PtyError::IoFailed)?;
+        buffer.truncate(read_len);
+
+        Ok(buffer)
     }
 
     fn resize(&mut self, handle: &PtyHandle, size: PtySize) -> PtyResult<()> {
@@ -151,7 +156,7 @@ impl PtyPort for UnixPty {
         };
 
         let _ = session.child.kill();
-        let _ = session.child.wait();
+        let _ = session.child.try_wait();
 
         Ok(())
     }

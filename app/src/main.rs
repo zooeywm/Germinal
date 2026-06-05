@@ -1,8 +1,10 @@
-use std::thread;
+mod pty_pump;
+
 use std::time::Duration;
 
+use compio::time::sleep;
 use germinal_application::{
-    gshell::{close_pty_gshell, read_pty_output, start_pty_gshell, write_pty_input},
+    gshell::{close_pty_gshell, start_pty_gshell, write_pty_input_async},
     rendering::render_frame,
 };
 use germinal_domain::{
@@ -11,30 +13,25 @@ use germinal_domain::{
 };
 use germinal_infra::{pty::UnixPty, renderer::FakeRenderer};
 
-fn main() {
+#[compio::main]
+async fn main() {
     let mut pty = UnixPty::new();
     let shell = start_pty_gshell(&mut pty, GShellId::new(1)).expect("failed to start PTY GShell");
 
-    write_pty_input(&mut pty, &shell, b"echo hello germinal\n").expect("failed to write PTY input");
+    sleep(Duration::from_millis(300)).await;
 
-    let mut last_byte = b'\n';
+    write_pty_input_async(&mut pty, &shell, b"echo hello germinal\n")
+        .await
+        .expect("failed to write PTY input");
 
-    for _ in 0..10 {
-        let output = read_pty_output(&mut pty, &shell).expect("failed to read PTY output");
+    let output = pty_pump::pump_pty_output_until(&mut pty, &shell, b"\r\nhello germinal\r\n").await;
 
-        if !output.is_empty() {
-            if let Some(byte) = output.last() {
-                last_byte = *byte;
-            }
+    if !output.is_empty() {
+        print!("{}", String::from_utf8_lossy(&output));
 
-            print!("{}", String::from_utf8_lossy(&output));
+        if output.last() != Some(&b'\n') {
+            println!();
         }
-
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    if last_byte != b'\n' {
-        println!();
     }
 
     close_pty_gshell(&mut pty, shell).expect("failed to close PTY GShell");

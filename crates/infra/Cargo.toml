@@ -12,3 +12,4 @@ germinal-ports.workspace = true
 
 rustix-openpty = "0.2"
 rustix = "1.1"
+compio = { workspace = true, features = ["runtime", "io", "async-fd"] }

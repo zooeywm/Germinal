@@ -36,24 +36,28 @@ pub type PtyResult<T> = Result<T, PtyError>;
 
 /// External capability port for PTY/ConPTY.
 ///
-/// Unix PTY and Windows ConPTY implementations should both implement this trait.
-/// The application layer uses this port to spawn a shell, write input, read output,
-/// and resize the terminal.
+/// This is the preferred port for runtime code.
+/// It does not require Send because the runtime may be single-threaded.
 pub trait PtyPort {
     /// Spawns a PTY session.
     fn spawn(&mut self) -> PtyResult<PtyHandle>;
 
     /// Writes input bytes to the PTY.
-    fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) -> PtyResult<()>;
+    fn write<'a>(
+        &'a mut self,
+        handle: &'a PtyHandle,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = PtyResult<()>> + 'a;
 
     /// Reads output bytes from the PTY.
-    fn read(&mut self, handle: &PtyHandle) -> PtyResult<Vec<u8>>;
+    fn read<'a>(
+        &'a mut self,
+        handle: &'a PtyHandle,
+    ) -> impl Future<Output = PtyResult<Vec<u8>>> + 'a;
 
     /// Resizes the PTY character grid.
     fn resize(&mut self, handle: &PtyHandle, size: PtySize) -> PtyResult<()>;
 
     /// Closes a PTY session.
-    ///
-    /// The handle is consumed, so callers should not use it after closing.
     fn close(&mut self, handle: PtyHandle) -> PtyResult<()>;
 }

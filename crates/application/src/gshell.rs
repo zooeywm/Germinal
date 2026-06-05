@@ -6,7 +6,7 @@ use germinal_ports::pty::{PtyHandle, PtyPort, PtySize};
 /// GShell is domain state.
 ///
 /// PtyHandle is a reference to the real PTY/ConPTY external resource.
-/// The binding lives in application so domain does not depend on ports or infra.s
+/// The binding lives in application so domain does not depend on ports or infra.
 pub struct RunningGShell {
     pub shell: GShell,
     pub pty: PtyHandle,

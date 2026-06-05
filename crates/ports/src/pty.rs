@@ -35,7 +35,7 @@ pub trait PtyPort {
     /// Writes input bytes to the PTY.
     fn write(&mut self, handle: &PtyHandle, bytes: &[u8]);
 
-    /// Writes input bytes to the PTY.
+    /// Reads output bytes from the PTY.
     fn read(&mut self, handle: &PtyHandle) -> Vec<u8>;
 
     /// Resizes the PTY character grid.

@@ -5,7 +5,7 @@ use crate::rendering::RenderCommand;
 /// RenderFrame is only a command list.
 /// It is not a GPU texture, window surface, or swapchain frame.
 pub struct RenderFrame {
-    pub commands: Vec<RenderCommand>,
+    commands: Vec<RenderCommand>,
 }
 
 impl RenderFrame {

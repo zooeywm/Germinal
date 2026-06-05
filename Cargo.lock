@@ -359,6 +359,8 @@ dependencies = [
  "germinal-application",
  "germinal-domain",
  "germinal-infra",
+ "germinal-ports",
+ "kudi",
 ]
 
 [[package]]
@@ -367,6 +369,7 @@ version = "0.0.1"
 dependencies = [
  "germinal-domain",
  "germinal-ports",
+ "kudi",
 ]
 
 [[package]]
@@ -435,6 +438,26 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "kudi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4549bcc6998eb40742901090a15e59f2c8574f9920b8bd96b8edf2d40acfc0a9"
+dependencies = [
+ "kudi-macros",
+]
+
+[[package]]
+name = "kudi-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "243c6729c8c25a7e665ab8c16faad968736c7ce76845f4e05b0500a416db8ef7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "lazy_static"

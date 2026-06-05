@@ -9,6 +9,10 @@ impl GShellId {
     pub fn new(value: u64) -> Self {
         Self(value)
     }
+
+    pub fn value(self) -> u64 {
+        self.0
+    }
 }
 
 /// Character-grid size of a PtyMode screen.

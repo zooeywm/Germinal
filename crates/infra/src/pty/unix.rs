@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::env;
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 
-use germinal_ports::pty::{PtyError, PtyHandle, PtyPort, PtyResult, PtySize};
+use germinal_domain::gshell::GShellId;
+use germinal_ports::pty::{PtyError, PtyPort, PtyResult, PtySize};
 use rustix::fd::OwnedFd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::termios::{Winsize, tcsetwinsize};
@@ -19,14 +21,12 @@ use compio::runtime::fd::AsyncFd;
 /// This owns real PTY resources on Unix-like systems.
 /// Each resource is addressed by a PtyHandle.
 pub struct UnixPty {
-    next_id: u64,
-    sessions: HashMap<u64, UnixPtySession>,
+    sessions: HashMap<GShellId, UnixPtySession>,
 }
 
 impl UnixPty {
     pub fn new() -> Self {
         Self {
-            next_id: 1,
             sessions: HashMap::new(),
         }
     }
@@ -48,7 +48,7 @@ struct UnixPtySession {
 }
 
 impl PtyPort for UnixPty {
-    fn spawn(&mut self) -> PtyResult<PtyHandle> {
+    fn spawn(&mut self, id: GShellId) -> PtyResult<()> {
         let pty = openpty(None, None).map_err(|_| PtyError::SpawnFailed)?;
 
         let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
@@ -93,22 +93,19 @@ impl PtyPort for UnixPty {
 
         let child = command.spawn().map_err(|_| PtyError::SpawnFailed)?;
 
-        let id = self.next_id;
-        self.next_id += 1;
-
-        self.sessions.insert(
-            id,
-            UnixPtySession {
-                pty_controller,
-                child,
-            },
-        );
-
-        Ok(PtyHandle::new(id))
+        match self.sessions.entry(id) {
+            Entry::Occupied(_) => Err(PtyError::AlreadyExists),
+            Entry::Vacant(entry) => {
+                entry.insert(UnixPtySession {
+                    pty_controller,
+                    child,
+                });
+                Ok(())
+            }
+        }
     }
 
-    async fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) -> PtyResult<()> {
-        let id = handle.id();
+    async fn write(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
         let session = self.sessions.get_mut(&id).ok_or(PtyError::UnknownHandle)?;
 
         let buffer = bytes.to_vec();
@@ -119,8 +116,7 @@ impl PtyPort for UnixPty {
         Ok(())
     }
 
-    async fn read(&mut self, handle: &PtyHandle) -> PtyResult<Vec<u8>> {
-        let id = handle.id();
+    async fn read(&mut self, id: GShellId) -> PtyResult<Vec<u8>> {
         let session = self.sessions.get_mut(&id).ok_or(PtyError::UnknownHandle)?;
 
         let buffer = vec![0; 4096];
@@ -132,8 +128,7 @@ impl PtyPort for UnixPty {
         Ok(buffer)
     }
 
-    fn resize(&mut self, handle: &PtyHandle, size: PtySize) -> PtyResult<()> {
-        let id = handle.id();
+    fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()> {
         let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
 
         let winsize = Winsize {
@@ -148,9 +143,7 @@ impl PtyPort for UnixPty {
         Ok(())
     }
 
-    fn close(&mut self, handle: PtyHandle) -> PtyResult<()> {
-        let id = handle.id();
-
+    fn close(&mut self, id: GShellId) -> PtyResult<()> {
         let Some(mut session) = self.sessions.remove(&id) else {
             return Err(PtyError::UnknownHandle);
         };

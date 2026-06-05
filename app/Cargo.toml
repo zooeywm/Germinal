@@ -10,5 +10,7 @@ authors.workspace = true
 germinal-application.workspace = true
 germinal-domain.workspace = true
 germinal-infra.workspace = true
+germinal-ports.workspace = true
 
 compio = { workspace = true, features = ["runtime", "macros", "time"] }
+kudi.workspace = true

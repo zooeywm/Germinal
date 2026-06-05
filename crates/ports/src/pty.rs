@@ -1,19 +1,4 @@
-/// Abstract handle for a real PTY/ConPTY resource.
-///
-/// The concrete resource is stored by infra.
-/// This handle only identifies that resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PtyHandle(u64);
-
-impl PtyHandle {
-    pub fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub fn id(&self) -> u64 {
-        self.0
-    }
-}
+use germinal_domain::gshell::GShellId;
 
 /// PTY terminal size.
 ///
@@ -27,6 +12,7 @@ pub struct PtySize {
 #[derive(Debug)]
 pub enum PtyError {
     SpawnFailed,
+    AlreadyExists,
     UnknownHandle,
     IoFailed,
 }
@@ -40,24 +26,21 @@ pub type PtyResult<T> = Result<T, PtyError>;
 /// It does not require Send because the runtime may be single-threaded.
 pub trait PtyPort {
     /// Spawns a PTY session.
-    fn spawn(&mut self) -> PtyResult<PtyHandle>;
+    fn spawn(&mut self, id: GShellId) -> PtyResult<()>;
 
     /// Writes input bytes to the PTY.
     fn write<'a>(
         &'a mut self,
-        handle: &'a PtyHandle,
+        id: GShellId,
         bytes: &'a [u8],
     ) -> impl Future<Output = PtyResult<()>> + 'a;
 
     /// Reads output bytes from the PTY.
-    fn read<'a>(
-        &'a mut self,
-        handle: &'a PtyHandle,
-    ) -> impl Future<Output = PtyResult<Vec<u8>>> + 'a;
+    fn read(&mut self, id: GShellId) -> impl Future<Output = PtyResult<Vec<u8>>> + '_;
 
     /// Resizes the PTY character grid.
-    fn resize(&mut self, handle: &PtyHandle, size: PtySize) -> PtyResult<()>;
+    fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()>;
 
     /// Closes a PTY session.
-    fn close(&mut self, handle: PtyHandle) -> PtyResult<()>;
+    fn close(&mut self, id: GShellId) -> PtyResult<()>;
 }

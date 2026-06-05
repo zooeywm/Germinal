@@ -1,32 +1,35 @@
-mod pty_pump;
+mod container;
 
-use std::time::Duration;
+use germinal_application::{gshell::GShellService, rendering::render_frame};
+use germinal_domain::rendering::{Color, RenderCommand, RenderFrame};
+use germinal_infra::renderer::FakeRenderer;
 
-use compio::time::sleep;
-use germinal_application::{
-    gshell::{close_pty_gshell, start_pty_gshell, write_pty},
-    rendering::render_frame,
-};
-use germinal_domain::{
-    gshell::GShellId,
-    rendering::{Color, RenderCommand, RenderFrame},
-};
-use germinal_infra::{pty::UnixPty, renderer::FakeRenderer};
+use crate::container::GerminalApp;
 
 #[compio::main]
 async fn main() {
-    let mut pty = UnixPty::new();
-    let mut shell =
-        start_pty_gshell(&mut pty, GShellId::new(1)).expect("failed to start PTY GShell");
+    let mut app = GerminalApp::new();
 
-    sleep(Duration::from_millis(300)).await;
+    let gshell_service = GShellService::inj_ref_mut(&mut app);
 
-    write_pty(&mut pty, &shell, b"echo hello germinal\n")
+    let shell_id = gshell_service.spawn().expect("failed to start PTY GShell");
+
+    gshell_service
+        .write_pty(shell_id, b"echo hello germinal\n")
         .await
         .expect("failed to write PTY input");
 
-    let output =
-        pty_pump::pump_pty_output_until(&mut pty, &mut shell, b"\r\nhello germinal\r\n").await;
+    let target = b"\r\nhello germinal\r\n";
+    let mut output = Vec::new();
+
+    while !output.windows(target.len()).any(|window| window == target) {
+        let bytes = gshell_service
+            .read_active_pty()
+            .await
+            .expect("failed to read PTY output");
+
+        output.extend_from_slice(&bytes);
+    }
 
     if !output.is_empty() {
         print!("{}", String::from_utf8_lossy(&output));
@@ -36,7 +39,9 @@ async fn main() {
         }
     }
 
-    close_pty_gshell(&mut pty, shell).expect("failed to close PTY GShell");
+    gshell_service
+        .close(shell_id)
+        .expect("failed to close PTY GShell");
 
     let mut frame = RenderFrame::new();
     frame.push(RenderCommand::Clear(Color {

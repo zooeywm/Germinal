@@ -22,3 +22,4 @@ germinal-application = { path = "crates/application" }
 germinal-infra = { path = "crates/infra" }
 
 compio = { version = "0.19", default-features = false, features = ["io-uring"] }
+kudi = "0.1"

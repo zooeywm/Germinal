@@ -1,8 +1,19 @@
 /// Abstract handle for a real PTY/ConPTY resource.
 ///
-/// The concrete content is defined by infra.
-/// The application layer only uses this handle to refer to the external resource.
-pub struct PtyHandle;
+/// The concrete resource is stored by infra.
+/// This handle only identifies that resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PtyHandle(u64);
+
+impl PtyHandle {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+}
 
 /// PTY terminal size.
 ///

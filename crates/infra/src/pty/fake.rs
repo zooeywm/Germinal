@@ -22,7 +22,7 @@ impl Default for FakePty {
 
 impl PtyPort for FakePty {
     fn spawn(&mut self) -> PtyHandle {
-        PtyHandle
+        PtyHandle::new(1)
     }
 
     fn write(&mut self, _handle: &PtyHandle, bytes: &[u8]) {

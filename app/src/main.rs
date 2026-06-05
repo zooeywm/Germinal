@@ -1,21 +1,43 @@
+use std::thread;
+use std::time::Duration;
+
 use germinal_application::{
-    gshell::{read_pty_output, start_pty_gshell, write_pty_input},
+    gshell::{close_pty_gshell, read_pty_output, start_pty_gshell, write_pty_input},
     rendering::render_frame,
 };
 use germinal_domain::{
     gshell::GShellId,
     rendering::{Color, RenderCommand, RenderFrame},
 };
-use germinal_infra::{pty::FakePty, renderer::FakeRenderer};
+use germinal_infra::{pty::UnixPty, renderer::FakeRenderer};
 
 fn main() {
-    let mut pty = FakePty::new();
+    let mut pty = UnixPty::new();
     let shell = start_pty_gshell(&mut pty, GShellId::new(1));
 
-    write_pty_input(&mut pty, &shell, b"hello germinal");
+    write_pty_input(&mut pty, &shell, b"echo hello germinal\n");
 
-    let output = read_pty_output(&mut pty, &shell);
-    println!("{}", String::from_utf8_lossy(&output));
+    let mut last_byte = b'\n';
+
+    for _ in 0..10 {
+        let output = read_pty_output(&mut pty, &shell);
+
+        if !output.is_empty() {
+            if let Some(byte) = output.last() {
+                last_byte = *byte;
+            }
+
+            print!("{}", String::from_utf8_lossy(&output));
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    if last_byte != b'\n' {
+        println!();
+    }
+
+    close_pty_gshell(&mut pty, shell);
 
     let mut frame = RenderFrame::new();
     frame.push(RenderCommand::Clear(Color {

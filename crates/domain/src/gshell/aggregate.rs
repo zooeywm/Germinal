@@ -6,7 +6,9 @@ use crate::gshell::{GNativeSession, GShellId, PtySession};
 /// It only keeps domain state and does not own real PTY, ConPTY, renderer, or OS resources.
 pub struct GShell {
     id: GShellId,
-    mode: GShellMode,
+    pty_session: PtySession,
+    gnative_session: Option<GNativeSession>,
+    active_mode: GShellMode,
 }
 
 impl GShell {
@@ -17,7 +19,9 @@ impl GShell {
     pub fn new(id: GShellId) -> Self {
         Self {
             id,
-            mode: GShellMode::Pty(PtySession::new()),
+            pty_session: PtySession::new(),
+            gnative_session: None,
+            active_mode: GShellMode::Pty,
         }
     }
 
@@ -26,12 +30,24 @@ impl GShell {
         self.id
     }
 
+    pub fn active_mode(&self) -> GShellMode {
+        self.active_mode
+    }
+
+    pub fn initialize_gnative(&mut self) {
+        if self.gnative_session.is_none() {
+            self.gnative_session = Some(GNativeSession::new());
+        }
+    }
+
     /// Enters GNativeMode.
     ///
     /// This only changes domain state.
     /// Starting the real GNativeApp and protocol connection is handled by application/infra.
     pub fn enter_gnative(&mut self) {
-        self.mode = GShellMode::GNative(GNativeSession::new())
+        if self.gnative_session.is_some() {
+            self.active_mode = GShellMode::GNative;
+        }
     }
 
     /// Exits GNativeMode and returns to PtyMode.
@@ -39,7 +55,25 @@ impl GShell {
     /// This only changes domain state.
     /// Resource cleanup is handled by application/infra.
     pub fn exit_gnative(&mut self) {
-        self.mode = GShellMode::Pty(PtySession::new())
+        self.gnative_session = None;
+        self.active_mode = GShellMode::Pty;
+    }
+
+    pub fn switch_mode(&mut self, mode: GShellMode) {
+        match mode {
+            GShellMode::Pty => {
+                self.active_mode = GShellMode::Pty;
+            }
+            GShellMode::GNative => {
+                if self.gnative_session.is_some() {
+                    self.active_mode = GShellMode::GNative;
+                }
+            }
+        }
+    }
+
+    pub fn apply_pty_output_bytes(&mut self, bytes: &[u8]) {
+        self.pty_session.apply_output_bytes(bytes);
     }
 }
 
@@ -47,7 +81,8 @@ impl GShell {
 ///
 /// Pty is used for traditional shell/TUI compatibility.
 /// GNative is used for structured native applications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GShellMode {
-    Pty(PtySession),
-    GNative(GNativeSession),
+    Pty,
+    GNative,
 }

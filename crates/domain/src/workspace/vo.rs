@@ -2,7 +2,7 @@
 pub struct PaneId(u64);
 
 impl PaneId {
-    pub const fn new(value: u64) -> Self {
+    pub fn new(value: u64) -> Self {
         Self(value)
     }
 

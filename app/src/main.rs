@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use compio::time::sleep;
 use germinal_application::{
-    gshell::{close_pty_gshell, start_pty_gshell, write_pty_input_async},
+    gshell::{close_pty_gshell, start_pty_gshell, write_pty},
     rendering::render_frame,
 };
 use germinal_domain::{
@@ -16,15 +16,17 @@ use germinal_infra::{pty::UnixPty, renderer::FakeRenderer};
 #[compio::main]
 async fn main() {
     let mut pty = UnixPty::new();
-    let shell = start_pty_gshell(&mut pty, GShellId::new(1)).expect("failed to start PTY GShell");
+    let mut shell =
+        start_pty_gshell(&mut pty, GShellId::new(1)).expect("failed to start PTY GShell");
 
     sleep(Duration::from_millis(300)).await;
 
-    write_pty_input_async(&mut pty, &shell, b"echo hello germinal\n")
+    write_pty(&mut pty, &shell, b"echo hello germinal\n")
         .await
         .expect("failed to write PTY input");
 
-    let output = pty_pump::pump_pty_output_until(&mut pty, &shell, b"\r\nhello germinal\r\n").await;
+    let output =
+        pty_pump::pump_pty_output_until(&mut pty, &mut shell, b"\r\nhello germinal\r\n").await;
 
     if !output.is_empty() {
         print!("{}", String::from_utf8_lossy(&output));

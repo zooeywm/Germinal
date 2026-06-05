@@ -37,7 +37,7 @@ pub fn start_pty_gshell(pty_port: &mut impl PtyPort, id: GShellId) -> PtyResult<
 }
 
 /// Writes input bytes to the PTY bound to this running GShell.
-pub async fn write_pty_input_async(
+pub async fn write_pty(
     pty_port: &mut impl PtyPort,
     running: &RunningGShell,
     bytes: &[u8],
@@ -46,11 +46,15 @@ pub async fn write_pty_input_async(
 }
 
 /// Reads output bytes from the PTY bound to this running GShell.
-pub async fn read_pty_output_async(
+pub async fn read_pty(
     pty_port: &mut impl PtyPort,
-    running: &RunningGShell,
+    running: &mut RunningGShell,
 ) -> PtyResult<Vec<u8>> {
-    pty_port.read(&running.pty).await
+    let bytes = pty_port.read(&running.pty).await?;
+
+    running.shell.apply_pty_output_bytes(&bytes);
+
+    Ok(bytes)
 }
 
 /// Resizes the PTY bound to this running GShell.

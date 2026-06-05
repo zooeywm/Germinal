@@ -5,11 +5,11 @@ import starlight from "@astrojs/starlight";
 // https://astro.build/config
 export default defineConfig({
   site: "https://zooeywm.github.io",
-  base: "/Germinal/",
+  base: "/germinal/",
   integrations: [
     starlight({
       title: "Germinal",
-      social: [{ icon: "github", label: "GitHub", href: "https://github.com/zooeywm/Germinal" }],
+      social: [{ icon: "github", label: "GitHub", href: "https://github.com/zooeywm/germinal" }],
       description: "Documentation for Germinal, the Graphical Terminal.",
       sidebar: [
         {

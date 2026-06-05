@@ -4,7 +4,7 @@ use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 
-use germinal_ports::pty::{PtyHandle, PtyPort, PtySize};
+use germinal_ports::pty::{PtyError, PtyHandle, PtyPort, PtyResult, PtySize};
 use rustix::fd::OwnedFd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, read, write};
@@ -45,8 +45,8 @@ struct UnixPtySession {
 }
 
 impl PtyPort for UnixPty {
-    fn spawn(&mut self) -> PtyHandle {
-        let pty = openpty(None, None).expect("failed to open PTY");
+    fn spawn(&mut self) -> PtyResult<PtyHandle> {
+        let pty = openpty(None, None).map_err(|_| PtyError::SpawnFailed)?;
 
         let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
 
@@ -54,13 +54,13 @@ impl PtyPort for UnixPty {
             .user
             .as_fd()
             .try_clone_to_owned()
-            .expect("failed to clone PTY user fd");
+            .map_err(|_| PtyError::SpawnFailed)?;
 
         let pty_controller = pty.controller;
 
-        let flags = fcntl_getfl(&pty_controller).expect("failed to get PTY flags");
+        let flags = fcntl_getfl(&pty_controller).map_err(|_| PtyError::SpawnFailed)?;
         fcntl_setfl(&pty_controller, flags | OFlags::NONBLOCK)
-            .expect("failed to set PTY nonblocking");
+            .map_err(|_| PtyError::SpawnFailed)?;
 
         // Drop the parent-owned user side. The child gets its own cloned fd.
         drop(pty.user);
@@ -86,7 +86,7 @@ impl PtyPort for UnixPty {
             command.pre_exec(pre_exec);
         }
 
-        let child = command.spawn().expect("failed to spawn shell");
+        let child = command.spawn().map_err(|_| PtyError::SpawnFailed)?;
 
         let id = self.next_id;
         self.next_id += 1;
@@ -99,35 +99,37 @@ impl PtyPort for UnixPty {
             },
         );
 
-        PtyHandle::new(id)
+        Ok(PtyHandle::new(id))
     }
 
-    fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) {
+    fn write(&mut self, handle: &PtyHandle, bytes: &[u8]) -> PtyResult<()> {
         let id = handle.id();
-        let session = self.sessions.get(&id).expect("unknown PTY handle");
+        let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
 
-        write(&session.pty_controller, bytes).expect("failed to write to PTY");
+        write(&session.pty_controller, bytes).map_err(|_| PtyError::IoFailed)?;
+
+        Ok(())
     }
 
-    fn read(&mut self, handle: &PtyHandle) -> Vec<u8> {
+    fn read(&mut self, handle: &PtyHandle) -> PtyResult<Vec<u8>> {
         let id = handle.id();
-        let session = self.sessions.get(&id).expect("unknown PTY handle");
+        let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
 
         let mut buffer = vec![0; 4096];
 
         match read(&session.pty_controller, &mut buffer) {
             Ok(read_len) => {
                 buffer.truncate(read_len);
-                buffer
+                Ok(buffer)
             }
-            Err(Errno::AGAIN) => Vec::new(),
-            Err(err) => panic!("failed to read from PTY: {err}"),
+            Err(Errno::AGAIN) => Ok(Vec::new()),
+            Err(_) => Err(PtyError::IoFailed),
         }
     }
 
-    fn resize(&mut self, handle: &PtyHandle, size: PtySize) {
+    fn resize(&mut self, handle: &PtyHandle, size: PtySize) -> PtyResult<()> {
         let id = handle.id();
-        let session = self.sessions.get(&id).expect("unknown PTY handle");
+        let session = self.sessions.get(&id).ok_or(PtyError::UnknownHandle)?;
 
         let winsize = Winsize {
             ws_row: size.rows,
@@ -136,17 +138,21 @@ impl PtyPort for UnixPty {
             ws_ypixel: 0,
         };
 
-        tcsetwinsize(&session.pty_controller, winsize).expect("failed to resize PTY");
+        tcsetwinsize(&session.pty_controller, winsize).map_err(|_| PtyError::IoFailed)?;
+
+        Ok(())
     }
 
-    fn close(&mut self, handle: PtyHandle) {
+    fn close(&mut self, handle: PtyHandle) -> PtyResult<()> {
         let id = handle.id();
 
         let Some(mut session) = self.sessions.remove(&id) else {
-            return;
+            return Err(PtyError::UnknownHandle);
         };
 
         let _ = session.child.kill();
         let _ = session.child.wait();
+
+        Ok(())
     }
 }

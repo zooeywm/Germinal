@@ -1,5 +1,5 @@
 use germinal_domain::gshell::{GShell, GShellId};
-use germinal_ports::pty::{PtyHandle, PtyPort, PtySize};
+use germinal_ports::pty::{PtyHandle, PtyPort, PtyResult, PtySize};
 
 /// Runtime binding maintained by the application layer.
 ///
@@ -16,31 +16,39 @@ pub struct RunningGShell {
 ///
 /// The GShell identity is provided by the caller.
 /// The actual PTY/ConPTY resource is created through PtyPort.
-pub fn start_pty_gshell(pty_port: &mut impl PtyPort, id: GShellId) -> RunningGShell {
+pub fn start_pty_gshell(pty_port: &mut impl PtyPort, id: GShellId) -> PtyResult<RunningGShell> {
     let shell = GShell::new(id);
-    let pty = pty_port.spawn();
+    let pty = pty_port.spawn()?;
 
-    RunningGShell { shell, pty }
+    Ok(RunningGShell { shell, pty })
 }
 
 /// Writes input bytes to the PTY bound to this running GShell.
-pub fn write_pty_input(pty_port: &mut impl PtyPort, running: &RunningGShell, bytes: &[u8]) {
-    pty_port.write(&running.pty, bytes);
+pub fn write_pty_input(
+    pty_port: &mut impl PtyPort,
+    running: &RunningGShell,
+    bytes: &[u8],
+) -> PtyResult<()> {
+    pty_port.write(&running.pty, bytes)
 }
 
 /// Reads output bytes from the PTY bound to this running GShell.
-pub fn read_pty_output(pty_port: &mut impl PtyPort, running: &RunningGShell) -> Vec<u8> {
+pub fn read_pty_output(pty_port: &mut impl PtyPort, running: &RunningGShell) -> PtyResult<Vec<u8>> {
     pty_port.read(&running.pty)
 }
 
 /// Resizes the PTY bound to this running GShell.
-pub fn resize_pty(pty_port: &mut impl PtyPort, running: &RunningGShell, size: PtySize) {
-    pty_port.resize(&running.pty, size);
+pub fn resize_pty(
+    pty_port: &mut impl PtyPort,
+    running: &RunningGShell,
+    size: PtySize,
+) -> PtyResult<()> {
+    pty_port.resize(&running.pty, size)
 }
 
 /// Closes the PTY bound to this running GShell.
-pub fn close_pty_gshell(pty_port: &mut impl PtyPort, running: RunningGShell) {
-    pty_port.close(running.pty);
+pub fn close_pty_gshell(pty_port: &mut impl PtyPort, running: RunningGShell) -> PtyResult<()> {
+    pty_port.close(running.pty)
 }
 
 /// Switches the running GShell to GNativeMode.

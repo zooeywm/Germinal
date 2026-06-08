@@ -13,18 +13,18 @@ pub struct GerminalApp {
 }
 
 impl GerminalApp {
-    pub fn new() -> Self {
-        Self {
-            pty_backend: UnixPty::new(),
-            renderer_backend: FakeRenderer,
-            gshell_service_state: GShellServiceState::new(),
-        }
-    }
-}
+    pub fn new() -> PtyResult<Self> {
+        let mut pty_backend = UnixPty::new();
+        let gshell_service_state = GShellServiceState::new();
 
-impl Default for GerminalApp {
-    fn default() -> Self {
-        Self::new()
+        let initial_id = gshell_service_state.active();
+        pty_backend.spawn(initial_id)?;
+
+        Ok(Self {
+            pty_backend,
+            renderer_backend: FakeRenderer,
+            gshell_service_state,
+        })
     }
 }
 

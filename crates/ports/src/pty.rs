@@ -1,8 +1,9 @@
-use germinal_domain::gshell::GShellId;
+pub use germinal_domain::gshell::GShellId;
 
 /// PTY terminal size.
 ///
 /// cols/rows are character-grid dimensions, not pixel dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
     pub cols: u16,
     pub rows: u16,
@@ -11,9 +12,16 @@ pub struct PtySize {
 /// PTY port error.
 #[derive(Debug)]
 pub enum PtyError {
+    /// Failed to spawn a new PTY session or its child shell process.
     SpawnFailed,
-    AlreadyExists,
-    UnknownHandle,
+
+    /// A PTY session already exists for the given GShellId.
+    SessionAlreadyExists,
+
+    /// No PTY session exists for the given GShellId.
+    SessionNotFound,
+
+    /// Failed to read from, write to, resize, or otherwise operate on the PTY.
     IoFailed,
 }
 

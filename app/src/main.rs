@@ -1,21 +1,21 @@
 mod container;
 
-use germinal_application::{gshell::GShellService, rendering::render_frame};
+use germinal_application::{
+    gshell::{CloseShellResult, GShellService},
+    rendering::render_frame,
+};
 use germinal_domain::rendering::{Color, RenderCommand, RenderFrame};
-use germinal_infra::renderer::FakeRenderer;
 
 use crate::container::GerminalApp;
 
 #[compio::main]
 async fn main() {
-    let mut app = GerminalApp::new();
+    let mut app = GerminalApp::new().expect("failed to create GerminalApp");
 
     let gshell_service = GShellService::inj_ref_mut(&mut app);
 
-    let shell_id = gshell_service.spawn().expect("failed to start PTY GShell");
-
     gshell_service
-        .write_pty(shell_id, b"echo hello germinal\n")
+        .write_active_pty(b"echo hello germinal\n")
         .await
         .expect("failed to write PTY input");
 
@@ -39,9 +39,13 @@ async fn main() {
         }
     }
 
-    gshell_service
-        .close(shell_id)
-        .expect("failed to close PTY GShell");
+    match gshell_service
+        .close_active()
+        .expect("failed to close PTY GShell")
+    {
+        CloseShellResult::Closed { .. } => {}
+        CloseShellResult::LastShellClosed => return,
+    }
 
     let mut frame = RenderFrame::new();
     frame.push(RenderCommand::Clear(Color {
@@ -62,6 +66,5 @@ async fn main() {
         },
     });
 
-    let mut renderer = FakeRenderer;
-    render_frame(&mut renderer, &frame);
+    render_frame(&mut app, &frame);
 }

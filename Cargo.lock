@@ -381,7 +381,6 @@ name = "germinal-infra"
 version = "0.0.1"
 dependencies = [
  "compio",
- "germinal-domain",
  "germinal-ports",
  "rustix",
  "rustix-openpty",

@@ -1,5 +1,4 @@
-use germinal_domain::rendering::RenderFrame;
-use germinal_ports::renderer::RendererPort;
+use germinal_ports::renderer::{RenderFrame, RendererPort};
 
 /// Fake renderer used to verify the rendering port wiring.
 ///

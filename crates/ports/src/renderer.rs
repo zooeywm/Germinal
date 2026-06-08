@@ -1,4 +1,4 @@
-use germinal_domain::rendering::RenderFrame;
+pub use germinal_domain::rendering::RenderFrame;
 
 /// External rendering capability port.
 ///

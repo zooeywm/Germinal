@@ -46,7 +46,7 @@ impl GShellServiceState {
         let id = shell.id();
 
         if self.shells.contains_key(&id) {
-            return Err(PtyError::AlreadyExists);
+            return Err(PtyError::SessionAlreadyExists);
         }
 
         self.shells.insert(id, shell);
@@ -58,7 +58,7 @@ impl GShellServiceState {
 
     fn activate(&mut self, id: GShellId) -> PtyResult<()> {
         if !self.shells.contains_key(&id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         self.active = id;
@@ -67,7 +67,7 @@ impl GShellServiceState {
 
     fn remove(&mut self, id: GShellId) -> PtyResult<CloseShellResult> {
         if !self.shells.contains_key(&id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         if self.shells.len() == 1 {
@@ -75,23 +75,29 @@ impl GShellServiceState {
             return Ok(CloseShellResult::LastShellClosed);
         }
 
-        self.shells.remove(&id);
-
-        if self.active == id {
-            self.active = *self
-                .shells
+        let next_active = if self.active == id {
+            self.shells
                 .keys()
-                .next()
-                .expect("shells is non-empty after removing non-last shell");
-        }
+                .copied()
+                .find(|candidate| *candidate != id)
+                .ok_or(PtyError::SessionNotFound)?
+        } else {
+            self.active
+        };
 
-        Ok(CloseShellResult::Closed {
-            next_active: self.active,
-        })
+        self.shells.remove(&id);
+        self.active = next_active;
+
+        Ok(CloseShellResult::Closed { next_active })
+    }
+
+    fn rollback_insert(&mut self, id: GShellId, previous_active: GShellId) {
+        self.shells.remove(&id);
+        self.active = previous_active;
     }
 
     fn apply_pty_output_bytes(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
-        let shell = self.shells.get_mut(&id).ok_or(PtyError::UnknownHandle)?;
+        let shell = self.shells.get_mut(&id).ok_or(PtyError::SessionNotFound)?;
         shell.apply_pty_output_bytes(bytes);
         Ok(())
     }
@@ -109,15 +115,23 @@ where
 {
     /// Starts a GShell in PtyMode through a PTY port.
     pub fn spawn(&mut self) -> PtyResult<GShellId> {
-        let id = {
+        let (id, previous_active) = {
             let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
-            state.allocate_id()
+            let previous_active = state.active();
+            let id = state.allocate_id();
+
+            state.insert(GShell::new(id))?;
+
+            (id, previous_active)
         };
 
-        self.prj_ref_mut().spawn(id)?;
+        if let Err(err) = self.prj_ref_mut().spawn(id) {
+            self.prj_ref_mut()
+                .as_mut()
+                .rollback_insert(id, previous_active);
 
-        let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
-        state.insert(GShell::new(id))?;
+            return Err(err);
+        }
 
         Ok(id)
     }
@@ -129,7 +143,7 @@ where
     /// Writes input bytes to the PTY bound to this running GShell.
     pub async fn write_pty(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
         if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         self.prj_ref_mut().write(id, bytes).await
@@ -138,7 +152,7 @@ where
     /// Reads output bytes from the PTY bound to this running GShell.
     pub async fn read_pty(&mut self, id: GShellId) -> PtyResult<Vec<u8>> {
         if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         let bytes = self.prj_ref_mut().read(id).await?;
@@ -153,7 +167,7 @@ where
     /// Resizes the PTY bound to this running GShell.
     pub fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()> {
         if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         self.prj_ref_mut().resize(id, size)
@@ -162,7 +176,7 @@ where
     /// Closes the PTY bound to this running GShell.
     pub fn close(&mut self, id: GShellId) -> PtyResult<CloseShellResult> {
         if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::UnknownHandle);
+            return Err(PtyError::SessionNotFound);
         }
 
         self.prj_ref_mut().close(id)?;
@@ -189,6 +203,7 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseShellResult {
     Closed { next_active: GShellId },
     LastShellClosed,

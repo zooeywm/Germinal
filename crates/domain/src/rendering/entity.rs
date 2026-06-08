@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::rendering::RenderCommand;
 
 /// One frame of rendering data produced by GNativeMode.
@@ -32,5 +34,50 @@ impl RenderFrame {
 impl Default for RenderFrame {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl fmt::Display for RenderFrame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "RenderFrame {{")?;
+
+        for command in &self.commands {
+            match command {
+                RenderCommand::Clear(color) => {
+                    writeln!(
+                        f,
+                        "  Clear rgba({}, {}, {}, {})",
+                        color.r, color.g, color.b, color.a
+                    )?;
+                }
+                RenderCommand::FillRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                    color,
+                } => {
+                    writeln!(
+                        f,
+                        "  FillRect x={} y={} width={} height={} rgba({}, {}, {}, {})",
+                        x, y, width, height, color.r, color.g, color.b, color.a
+                    )?;
+                }
+                RenderCommand::Text {
+                    x,
+                    y,
+                    content,
+                    color,
+                } => {
+                    writeln!(
+                        f,
+                        "  Text x={} y={} rgba({}, {}, {}, {}): {}",
+                        x, y, color.r, color.g, color.b, color.a, content
+                    )?;
+                }
+            }
+        }
+
+        write!(f, "}}")
     }
 }

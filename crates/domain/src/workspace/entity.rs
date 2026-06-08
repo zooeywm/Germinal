@@ -213,7 +213,7 @@ impl PaneNode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pane {
     id: PaneId,
 }

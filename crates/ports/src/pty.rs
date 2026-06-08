@@ -10,7 +10,7 @@ pub struct PtySize {
 }
 
 /// PTY port error.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtyError {
     /// Failed to spawn a new PTY session or its child shell process.
     SpawnFailed,

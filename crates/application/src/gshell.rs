@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use germinal_domain::gshell::{GShell, GShellId};
+use germinal_domain::gshell::{GRequest, GShell, GShellId, detect_gnative_request};
 use germinal_ports::pty::{PtyError, PtyPort, PtyResult, PtySize};
 
 /// Runtime binding maintained by the application layer.
@@ -13,6 +13,12 @@ pub struct GShellServiceState {
     next_id: u64,
     active: GShellId,
     shells: HashMap<GShellId, GShell>,
+}
+
+#[derive(Debug)]
+pub enum GShellPtyEvent {
+    Output(Vec<u8>),
+    EnterGNative(GRequest),
 }
 
 impl GShellServiceState {
@@ -28,18 +34,18 @@ impl GShellServiceState {
         }
     }
 
-    fn allocate_id(&mut self) -> GShellId {
-        let id = GShellId::new(self.next_id);
-        self.next_id += 1;
-        id
-    }
-
     pub fn active(&self) -> GShellId {
         self.active
     }
 
     pub fn contains(&self, id: GShellId) -> bool {
         self.shells.contains_key(&id)
+    }
+
+    fn allocate_id(&mut self) -> GShellId {
+        let id = GShellId::new(self.next_id);
+        self.next_id += 1;
+        id
     }
 
     fn insert(&mut self, shell: GShell) -> PtyResult<()> {
@@ -101,6 +107,10 @@ impl GShellServiceState {
         shell.apply_pty_output_bytes(bytes);
         Ok(())
     }
+
+    fn shell_mut(&mut self, id: GShellId) -> PtyResult<&mut GShell> {
+        self.shells.get_mut(&id).ok_or(PtyError::SessionNotFound)
+    }
 }
 
 impl Default for GShellServiceState {
@@ -140,6 +150,34 @@ where
         self.prj_ref_mut().as_mut().activate(id)
     }
 
+    fn active_id(&self) -> GShellId {
+        self.prj_ref().as_ref().active()
+    }
+
+    pub async fn read_pty_event(&mut self, id: GShellId) -> PtyResult<GShellPtyEvent> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        let bytes = self.prj_ref_mut().read(id).await?;
+
+        if let Some(request) = detect_gnative_request(&bytes) {
+            self.enter_gnative(id, request.clone())?;
+            return Ok(GShellPtyEvent::EnterGNative(request));
+        }
+
+        self.prj_ref_mut()
+            .as_mut()
+            .apply_pty_output_bytes(id, &bytes)?;
+
+        Ok(GShellPtyEvent::Output(bytes))
+    }
+
+    pub async fn read_active_pty_event(&mut self) -> PtyResult<GShellPtyEvent> {
+        let id = self.active_id();
+        self.read_pty_event(id).await
+    }
+
     /// Writes input bytes to the PTY bound to this running GShell.
     pub async fn write_pty(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
         if !self.prj_ref().as_ref().contains(id) {
@@ -149,19 +187,9 @@ where
         self.prj_ref_mut().write(id, bytes).await
     }
 
-    /// Reads output bytes from the PTY bound to this running GShell.
-    pub async fn read_pty(&mut self, id: GShellId) -> PtyResult<Vec<u8>> {
-        if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::SessionNotFound);
-        }
-
-        let bytes = self.prj_ref_mut().read(id).await?;
-
-        self.prj_ref_mut()
-            .as_mut()
-            .apply_pty_output_bytes(id, &bytes)?;
-
-        Ok(bytes)
+    pub async fn write_active_pty(&mut self, bytes: &[u8]) -> PtyResult<()> {
+        let id = self.active_id();
+        self.write_pty(id, bytes).await
     }
 
     /// Resizes the PTY bound to this running GShell.
@@ -171,6 +199,11 @@ where
         }
 
         self.prj_ref_mut().resize(id, size)
+    }
+
+    pub fn resize_active(&mut self, size: PtySize) -> PtyResult<()> {
+        let id = self.active_id();
+        self.resize(id, size)
     }
 
     /// Closes the PTY bound to this running GShell.
@@ -183,27 +216,53 @@ where
         self.prj_ref_mut().as_mut().remove(id)
     }
 
-    pub async fn write_active_pty(&mut self, bytes: &[u8]) -> PtyResult<()> {
-        let id = self.active_id();
-        self.write_pty(id, bytes).await
-    }
-
-    pub async fn read_active_pty(&mut self) -> PtyResult<Vec<u8>> {
-        let id = self.active_id();
-        self.read_pty(id).await
-    }
-
     pub fn close_active(&mut self) -> PtyResult<CloseShellResult> {
         let id = self.active_id();
         self.close(id)
     }
 
-    fn active_id(&self) -> GShellId {
-        self.prj_ref().as_ref().active()
+    pub fn exit_gnative(&mut self, id: GShellId) -> PtyResult<()> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
+        let shell = state.shell_mut(id)?;
+
+        shell.exit_gnative();
+
+        Ok(())
+    }
+
+    pub fn exit_active_gnative(&mut self) -> PtyResult<()> {
+        let id = self.active_id();
+        self.exit_gnative(id)
+    }
+
+    pub fn enter_gnative(&mut self, id: GShellId, request: GRequest) -> PtyResult<()> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        match request {
+            GRequest::EnterGNative { .. } => {
+                let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
+                let shell = state.shell_mut(id)?;
+
+                shell.initialize_gnative();
+                shell.enter_gnative();
+
+                Ok(())
+            }
+        }
+    }
+
+    pub fn enter_active_gnative(&mut self, request: GRequest) -> PtyResult<()> {
+        let id = self.active_id();
+        self.enter_gnative(id, request)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseShellResult {
     Closed { next_active: GShellId },
     LastShellClosed,

@@ -1,3 +1,3 @@
 mod unix;
 
-pub use unix::UnixPty;
+pub use unix::{UnixPty, UnixPtyReader, UnixPtyWriter};

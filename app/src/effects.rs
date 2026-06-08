@@ -8,47 +8,81 @@ use std::{
 
 use germinal_application::runtime::RuntimeEffect;
 use germinal_domain::gshell::GShellId;
-use germinal_infra::pty::UnixPty;
-use germinal_ports::pty::{PtyPort, PtyResult};
+use germinal_infra::{
+    pty::{UnixPty, UnixPtyReader, UnixPtyWriter},
+    window::WinitWindowEventProxy,
+};
+use germinal_ports::{pty::PtyResult, window::WindowEventProxy};
 
 use crate::container::GerminalApp;
 
 pub struct RuntimeEffectExecutor {
-    shared: Rc<RefCell<RuntimeEffectExecutorShared>>,
+    write_queue: Rc<RefCell<PtyWriteQueue>>,
+    read_state: Rc<RefCell<PtyReadState>>,
 }
 
-struct RuntimeEffectExecutorShared {
-    commands: VecDeque<RuntimeIoCommand>,
+struct PtyWriteQueue {
+    commands: VecDeque<PtyWriteCommand>,
     waker: Option<Waker>,
 }
 
-struct RuntimeEffectIoRunner {
-    shared: Rc<RefCell<RuntimeEffectExecutorShared>>,
-    pty_backend: UnixPty,
+struct PtyReadState {
+    window_proxy: Option<WinitWindowEventProxy>,
 }
 
-enum RuntimeIoCommand {
-    WritePty { id: GShellId, bytes: Vec<u8> },
+struct PtyWriteWorker {
+    queue: Rc<RefCell<PtyWriteQueue>>,
+    pty_writer: UnixPtyWriter,
+}
+
+struct PtyReadLoop {
+    state: Rc<RefCell<PtyReadState>>,
+    pty_reader: UnixPtyReader,
+    active_id: GShellId,
+}
+
+struct PtyWriteCommand {
+    id: GShellId,
+    bytes: Vec<u8>,
 }
 
 impl RuntimeEffectExecutor {
     pub fn new(initial_id: GShellId) -> PtyResult<Self> {
-        let mut pty_backend = UnixPty::new();
-        pty_backend.spawn(initial_id)?;
+        let (pty_reader, pty_writer) = UnixPty::spawn_split(initial_id)?;
 
-        let shared = Rc::new(RefCell::new(RuntimeEffectExecutorShared {
+        let write_queue = Rc::new(RefCell::new(PtyWriteQueue {
             commands: VecDeque::new(),
             waker: None,
         }));
+        let read_state = Rc::new(RefCell::new(PtyReadState { window_proxy: None }));
 
-        let runner = RuntimeEffectIoRunner {
-            shared: shared.clone(),
-            pty_backend,
-        };
+        compio::runtime::spawn(
+            PtyWriteWorker {
+                queue: write_queue.clone(),
+                pty_writer,
+            }
+            .run(),
+        )
+        .detach();
 
-        compio::runtime::spawn(runner.run()).detach();
+        compio::runtime::spawn(
+            PtyReadLoop {
+                state: read_state.clone(),
+                pty_reader,
+                active_id: initial_id,
+            }
+            .run(),
+        )
+        .detach();
 
-        Ok(Self { shared })
+        Ok(Self {
+            write_queue,
+            read_state,
+        })
+    }
+
+    pub fn set_window_event_proxy(&mut self, proxy: WinitWindowEventProxy) {
+        self.read_state.borrow_mut().window_proxy = Some(proxy);
     }
 
     pub fn apply(&mut self, app: &mut GerminalApp, effects: Vec<RuntimeEffect>) {
@@ -60,17 +94,17 @@ impl RuntimeEffectExecutor {
                         continue;
                     }
 
-                    self.enqueue_command(RuntimeIoCommand::WritePty { id, bytes });
+                    self.enqueue_write(PtyWriteCommand { id, bytes });
                 }
             }
         }
     }
 
-    fn enqueue_command(&self, command: RuntimeIoCommand) {
+    fn enqueue_write(&self, command: PtyWriteCommand) {
         let waker = {
-            let mut shared = self.shared.borrow_mut();
-            shared.commands.push_back(command);
-            shared.waker.take()
+            let mut queue = self.write_queue.borrow_mut();
+            queue.commands.push_back(command);
+            queue.waker.take()
         };
 
         if let Some(waker) = waker {
@@ -79,30 +113,47 @@ impl RuntimeEffectExecutor {
     }
 }
 
-impl RuntimeEffectIoRunner {
+impl PtyWriteWorker {
     async fn run(mut self) {
         loop {
-            match self.next_command().await {
-                RuntimeIoCommand::WritePty { id, bytes } => {
-                    if let Err(err) = self.pty_backend.write(id, &bytes).await {
-                        eprintln!("failed to write PTY input: {err:?}");
-                    }
-                }
+            let command = self.next_command().await;
+
+            if let Err(err) = self.pty_writer.write(command.id, &command.bytes).await {
+                eprintln!("failed to write PTY input: {err:?}");
             }
         }
     }
 
-    async fn next_command(&self) -> RuntimeIoCommand {
+    async fn next_command(&self) -> PtyWriteCommand {
         poll_fn(|cx| {
-            let mut shared = self.shared.borrow_mut();
+            let mut queue = self.queue.borrow_mut();
 
-            if let Some(command) = shared.commands.pop_front() {
+            if let Some(command) = queue.commands.pop_front() {
                 Poll::Ready(command)
             } else {
-                shared.waker = Some(cx.waker().clone());
+                queue.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
         })
         .await
+    }
+}
+
+impl PtyReadLoop {
+    async fn run(mut self) {
+        loop {
+            match self.pty_reader.read(self.active_id).await {
+                Ok(bytes) if bytes.is_empty() => {}
+                Ok(_bytes) => {
+                    if let Some(proxy) = self.state.borrow().window_proxy.clone() {
+                        proxy.notify_pty_output();
+                    }
+                }
+                Err(err) => {
+                    eprintln!("failed to read PTY output: {err:?}");
+                    break;
+                }
+            }
+        }
     }
 }

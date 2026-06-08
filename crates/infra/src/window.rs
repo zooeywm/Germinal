@@ -23,6 +23,7 @@ use crate::renderer::WgpuRendererBackend;
 pub struct GerminalWindowApp<Handler> {
     handler: Handler,
     window: Option<Arc<Window>>,
+    pending_gpu_window: Option<Arc<Window>>,
     gpu: Rc<RefCell<Option<WgpuRendererBackend>>>,
     modifiers: KeyModifiers,
 }
@@ -35,6 +36,7 @@ where
         Self {
             handler,
             window: None,
+            pending_gpu_window: None,
             gpu: Rc::new(RefCell::new(None)),
             modifiers: KeyModifiers::default(),
         }
@@ -58,6 +60,12 @@ where
 
             if matches!(status, PumpStatus::Exit(_)) || self.handler.should_exit() {
                 break;
+            }
+
+            if let Some(window) = self.pending_gpu_window.take() {
+                let renderer = WgpuRendererBackend::new(window.clone()).await;
+                *self.gpu.borrow_mut() = Some(renderer);
+                window.request_redraw();
             }
 
             compio::runtime::time::sleep(Duration::from_millis(1)).await;
@@ -99,19 +107,9 @@ where
                 .expect("failed to create Germinal window"),
         );
 
-        let gpu = self.gpu.clone();
-        compio::runtime::spawn({
-            let window = window.clone();
-            async move {
-                let renderer = WgpuRendererBackend::new(window.clone()).await;
-                *gpu.borrow_mut() = Some(renderer);
-                window.request_redraw();
-            }
-        })
-        .detach();
-
         window.request_redraw();
 
+        self.pending_gpu_window = Some(window.clone());
         self.window = Some(window);
     }
 

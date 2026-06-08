@@ -66,13 +66,16 @@ impl fmt::Display for RenderFrame {
                 RenderCommand::Text {
                     x,
                     y,
+                    width,
+                    height,
+                    font_size,
                     content,
                     color,
                 } => {
                     writeln!(
                         f,
-                        "  Text x={} y={} rgba({}, {}, {}, {}): {}",
-                        x, y, color.r, color.g, color.b, color.a, content
+                        "  Text x={} y={} width={} height={} font_size={} rgba({}, {}, {}, {}): {}",
+                        x, y, width, height, font_size, color.r, color.g, color.b, color.a, content
                     )?;
                 }
             }

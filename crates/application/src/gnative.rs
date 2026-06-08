@@ -95,9 +95,13 @@ fn compose_surface_to_frame(surface: &GNativeSurface) -> RenderFrame {
                 content,
                 color,
             } => {
+                let width = content.chars().count() as f32 * 9.0;
                 frame.push(RenderCommand::Text {
                     x: *x,
                     y: *y,
+                    width,
+                    height: 18.0,
+                    font_size: 15.0,
                     content: content.clone(),
                     color: RenderColor {
                         r: color.r,

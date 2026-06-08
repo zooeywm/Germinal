@@ -1,8 +1,8 @@
 use germinal_application::{
-    gshell::GShellServiceState,
-    runtime::{GerminalRuntime, RuntimeControlFlow, RuntimeEventResult},
+    gshell::{GShellService, GShellServiceState},
+    runtime::{GerminalRuntime, RuntimeControlFlow, RuntimeEvent, RuntimeEventResult},
 };
-use germinal_domain::rendering::RenderFrame;
+use germinal_domain::{gshell::GShellId, rendering::RenderFrame};
 use germinal_infra::window::WinitWindowEventProxy;
 use germinal_ports::window::{
     WindowControlFlow, WindowEvent, WindowEventHandler, WindowEventProxy, WindowEventResult,
@@ -14,6 +14,7 @@ pub struct GerminalRuntimeHost {
     app: GerminalApp,
     effect_executor: RuntimeEffectExecutor,
     pending_frame: Option<RenderFrame>,
+    redraw_requested: bool,
     control_flow: WindowControlFlow,
     window_proxy: Option<WinitWindowEventProxy>,
 }
@@ -28,6 +29,7 @@ impl GerminalRuntimeHost {
             effect_executor: RuntimeEffectExecutor::new(initial_id)
                 .expect("failed to create RuntimeEffectExecutor"),
             pending_frame: None,
+            redraw_requested: false,
             control_flow: WindowControlFlow::Continue,
             window_proxy: None,
         }
@@ -38,7 +40,46 @@ impl GerminalRuntimeHost {
         runtime.handle_window_event(event)
     }
 
-    fn handle_runtime_result(&mut self, result: RuntimeEventResult) -> WindowEventResult {
+    fn update_pty_output(&mut self, id: GShellId, bytes: Vec<u8>) -> Option<RuntimeEventResult> {
+        let event = {
+            let gshell_service = GShellService::inj_ref_mut(&mut self.app);
+
+            match gshell_service.handle_pty_output_bytes(id, bytes) {
+                Ok(event) => event,
+                Err(err) => {
+                    eprintln!("failed to handle PTY output: {err:?}");
+                    return None;
+                }
+            }
+        };
+
+        let runtime = GerminalRuntime::inj_ref_mut(&mut self.app);
+
+        match runtime.handle_event(RuntimeEvent::Pty(event)) {
+            Ok(result) => Some(result),
+            Err(err) => {
+                eprintln!("failed to handle runtime PTY event: {err:?}");
+                None
+            }
+        }
+    }
+
+    fn request_redraw(&mut self) {
+        if self.redraw_requested {
+            return;
+        }
+
+        if let Some(proxy) = &self.window_proxy {
+            proxy.request_redraw();
+            self.redraw_requested = true;
+        }
+    }
+
+    fn handle_runtime_result(
+        &mut self,
+        result: RuntimeEventResult,
+        request_redraw_on_frame: bool,
+    ) -> WindowEventResult {
         let RuntimeEventResult {
             control_flow,
             frame,
@@ -54,8 +95,8 @@ impl GerminalRuntimeHost {
                 if let Some(frame) = frame {
                     self.pending_frame = Some(frame);
 
-                    if let Some(proxy) = &self.window_proxy {
-                        proxy.request_redraw();
+                    if request_redraw_on_frame {
+                        self.request_redraw();
                     }
                 }
 
@@ -92,8 +133,28 @@ impl WindowEventHandler for GerminalRuntimeHost {
     }
 
     fn handle_window_event(&mut self, event: WindowEvent) -> WindowEventResult {
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.redraw_requested = false;
+        }
+
+        let request_redraw_on_frame = !matches!(event, WindowEvent::RedrawRequested);
         let result = self.update_window_event(event);
-        self.handle_runtime_result(result)
+        self.handle_runtime_result(result, request_redraw_on_frame)
+    }
+
+    fn handle_pty_output(&mut self, id: GShellId, bytes: Vec<u8>) -> WindowEventResult {
+        let Some(result) = self.update_pty_output(id, bytes) else {
+            return WindowEventResult {
+                control_flow: self.control_flow,
+                frame: None,
+            };
+        };
+
+        if result.frame.is_none() && matches!(result.control_flow, RuntimeControlFlow::Continue) {
+            self.request_redraw();
+        }
+
+        self.handle_runtime_result(result, true)
     }
 
     fn take_pending_frame(&mut self) -> Option<RenderFrame> {

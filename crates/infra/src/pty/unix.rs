@@ -10,6 +10,9 @@ use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::termios::{Winsize, tcsetwinsize};
 use rustix_openpty::{login_tty, openpty};
 
+const DEFAULT_PTY_COLS: u16 = 80;
+const DEFAULT_PTY_ROWS: u16 = 24;
+
 use compio::buf::BufResult;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::runtime::fd::AsyncFd;
@@ -121,7 +124,7 @@ impl UnixPtyWriter {
         Ok(())
     }
 
-    fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()> {
+    pub fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()> {
         let session = self.sessions.get(&id).ok_or(PtyError::SessionNotFound)?;
 
         let winsize = Winsize {
@@ -186,7 +189,13 @@ impl PtyPort for UnixPty {
 }
 
 fn spawn_session_pair() -> PtyResult<(AsyncFd<OwnedFd>, UnixPtyWriteSession)> {
-    let pty = openpty(None, None).map_err(|_| PtyError::SpawnFailed)?;
+    let winsize = Winsize {
+        ws_row: DEFAULT_PTY_ROWS,
+        ws_col: DEFAULT_PTY_COLS,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let pty = openpty(None, Some(&winsize)).map_err(|_| PtyError::SpawnFailed)?;
 
     let shell = env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
 

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
 use germinal_ports::{
+    pty::GShellId,
     renderer::RendererPort,
     window::{
         KeyCode, KeyModifiers, KeyState, KeyboardInput as GerminalKeyboardInput, WindowControlFlow,
@@ -23,7 +24,6 @@ use crate::renderer::WgpuRendererBackend;
 pub struct GerminalWindowApp<Handler> {
     handler: Handler,
     window: Option<Arc<Window>>,
-    pending_gpu_window: Option<Arc<Window>>,
     gpu: Rc<RefCell<Option<WgpuRendererBackend>>>,
     modifiers: KeyModifiers,
 }
@@ -36,7 +36,6 @@ where
         Self {
             handler,
             window: None,
-            pending_gpu_window: None,
             gpu: Rc::new(RefCell::new(None)),
             modifiers: KeyModifiers::default(),
         }
@@ -58,18 +57,27 @@ where
         loop {
             let status = event_loop.pump_app_events(Some(Duration::ZERO), &mut self);
 
-            if matches!(status, PumpStatus::Exit(_)) || self.handler.should_exit() {
+            if let PumpStatus::Exit(_) = status {
                 break;
             }
 
-            if let Some(window) = self.pending_gpu_window.take() {
-                let renderer = WgpuRendererBackend::new(window.clone()).await;
-                *self.gpu.borrow_mut() = Some(renderer);
-                window.request_redraw();
+            if self.handler.should_exit() {
+                break;
             }
 
-            compio::runtime::time::sleep(Duration::from_millis(1)).await;
+            compio::runtime::time::sleep(Duration::from_micros(1)).await;
         }
+    }
+
+    fn start_gpu_init(&self, window: Arc<Window>) {
+        let gpu = self.gpu.clone();
+
+        compio::runtime::spawn(async move {
+            let renderer = WgpuRendererBackend::new(window.clone()).await;
+            *gpu.borrow_mut() = Some(renderer);
+            window.request_redraw();
+        })
+        .detach();
     }
 
     fn handle_germinal_window_event(
@@ -107,9 +115,18 @@ where
                 .expect("failed to create Germinal window"),
         );
 
+        let size = window.inner_size();
+        let _ = self.handle_germinal_window_event(
+            event_loop,
+            GerminalWindowEvent::Resized(WindowSize {
+                width: size.width,
+                height: size.height,
+            }),
+        );
+
         window.request_redraw();
 
-        self.pending_gpu_window = Some(window.clone());
+        self.start_gpu_init(window.clone());
         self.window = Some(window);
     }
 
@@ -142,16 +159,25 @@ where
                 }
             }
             WindowEvent::RedrawRequested => {
+                if self.gpu.borrow().is_none() {
+                    return;
+                }
+
                 if let Some(frame) = self.handler.take_pending_frame() {
                     if let Some(gpu) = self.gpu.borrow_mut().as_mut() {
                         gpu.render(&frame);
                     }
-
                     return;
                 }
 
                 let _ = self
                     .handle_germinal_window_event(event_loop, GerminalWindowEvent::RedrawRequested);
+
+                if let Some(frame) = self.handler.take_pending_frame() {
+                    if let Some(gpu) = self.gpu.borrow_mut().as_mut() {
+                        gpu.render(&frame);
+                    }
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let input = map_keyboard_input(&event, self.modifiers);
@@ -182,9 +208,15 @@ where
                     window.request_redraw();
                 }
             }
-            GerminalWindowUserEvent::PtyOutput => {
-                if let Some(window) = &self.window {
-                    window.request_redraw();
+            GerminalWindowUserEvent::PtyOutput { id, bytes } => {
+                let result = self.handler.handle_pty_output(id, bytes);
+
+                if result.control_flow == WindowControlFlow::Exit || self.handler.should_exit() {
+                    _event_loop.exit();
+                }
+
+                if let (Some(gpu), Some(frame)) = (self.gpu.borrow_mut().as_mut(), result.frame) {
+                    gpu.render(&frame);
                 }
             }
             GerminalWindowUserEvent::Exit => {
@@ -204,6 +236,7 @@ fn map_keyboard_input(event: &KeyEvent, modifiers: KeyModifiers) -> GerminalKeyb
         Key::Named(NamedKey::Enter) => KeyCode::Enter,
         Key::Named(NamedKey::Backspace) => KeyCode::Backspace,
         Key::Named(NamedKey::Escape) => KeyCode::Escape,
+        Key::Named(NamedKey::Space) => KeyCode::Character(' '),
         Key::Named(NamedKey::ArrowUp) => KeyCode::ArrowUp,
         Key::Named(NamedKey::ArrowDown) => KeyCode::ArrowDown,
         Key::Named(NamedKey::ArrowLeft) => KeyCode::ArrowLeft,
@@ -226,7 +259,7 @@ fn map_keyboard_input(event: &KeyEvent, modifiers: KeyModifiers) -> GerminalKeyb
 #[derive(Debug)]
 pub enum GerminalWindowUserEvent {
     RequestRedraw,
-    PtyOutput,
+    PtyOutput { id: GShellId, bytes: Vec<u8> },
     Exit,
 }
 
@@ -248,8 +281,10 @@ impl WindowEventProxy for WinitWindowEventProxy {
             .send_event(GerminalWindowUserEvent::RequestRedraw);
     }
 
-    fn notify_pty_output(&self) {
-        let _ = self.proxy.send_event(GerminalWindowUserEvent::PtyOutput);
+    fn notify_pty_output(&self, id: GShellId, bytes: Vec<u8>) {
+        let _ = self
+            .proxy
+            .send_event(GerminalWindowUserEvent::PtyOutput { id, bytes });
     }
 
     fn request_exit(&self) {

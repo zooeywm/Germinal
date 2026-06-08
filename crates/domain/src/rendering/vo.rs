@@ -2,6 +2,7 @@
 ///
 /// The channels use u8 so renderer implementations can convert them to common
 /// pixel formats directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -30,6 +31,9 @@ pub enum RenderCommand {
     Text {
         x: f32,
         y: f32,
+        width: f32,
+        height: f32,
+        font_size: f32,
         content: String,
         color: Color,
     },

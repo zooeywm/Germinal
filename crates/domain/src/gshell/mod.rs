@@ -7,7 +7,7 @@ mod error;
 mod protocol;
 
 pub use aggregate::{GShell, GShellMode};
-pub use entity::{GNativeSession, PtySession};
+pub use entity::GNativeSession;
 pub use vo::*;
 
 pub use protocol::*;

@@ -1,7 +1,17 @@
 use std::collections::HashMap;
 
 use germinal_domain::gshell::{GRequest, GShell, GShellId, detect_gnative_request};
-use germinal_ports::pty::{PtyError, PtyPort, PtyResult, PtySize};
+use germinal_ports::window::WindowSize;
+use germinal_ports::{
+    pty::{PtyError, PtyPort, PtyResult, PtySize},
+    terminal::{TerminalEnginePort, TerminalScreen, TerminalSize},
+};
+
+const DEFAULT_TERMINAL_FONT_SIZE: f32 = 15.0;
+const TERMINAL_CELL_WIDTH_SCALE: f32 = 0.62;
+const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.18;
+const DEFAULT_TERMINAL_COLS: u16 = 80;
+const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
 /// Runtime binding maintained by the application layer.
 ///
@@ -13,11 +23,16 @@ pub struct GShellServiceState {
     next_id: u64,
     active: GShellId,
     shells: HashMap<GShellId, GShell>,
+    terminal_font_size: f32,
+    last_window_size: Option<WindowSize>,
 }
 
 #[derive(Debug)]
 pub enum GShellPtyEvent {
-    Output(Vec<u8>),
+    Output {
+        id: GShellId,
+        responses: Vec<Vec<u8>>,
+    },
     EnterGNative(GRequest),
 }
 
@@ -31,6 +46,8 @@ impl GShellServiceState {
             next_id: initial_id.value() + 1,
             active: initial_id,
             shells,
+            terminal_font_size: DEFAULT_TERMINAL_FONT_SIZE,
+            last_window_size: None,
         }
     }
 
@@ -102,14 +119,24 @@ impl GShellServiceState {
         self.active = previous_active;
     }
 
-    fn apply_pty_output_bytes(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
-        let shell = self.shells.get_mut(&id).ok_or(PtyError::SessionNotFound)?;
-        shell.apply_pty_output_bytes(bytes);
-        Ok(())
-    }
-
     fn shell_mut(&mut self, id: GShellId) -> PtyResult<&mut GShell> {
         self.shells.get_mut(&id).ok_or(PtyError::SessionNotFound)
+    }
+
+    pub fn terminal_font_size(&self) -> f32 {
+        self.terminal_font_size
+    }
+
+    pub fn set_terminal_font_size(&mut self, font_size: f32) {
+        self.terminal_font_size = font_size;
+    }
+
+    pub fn last_window_size(&self) -> Option<WindowSize> {
+        self.last_window_size
+    }
+
+    pub fn set_last_window_size(&mut self, size: WindowSize) {
+        self.last_window_size = Some(size);
     }
 }
 
@@ -121,7 +148,7 @@ impl Default for GShellServiceState {
 
 impl<Deps> GShellService<Deps>
 where
-    Deps: AsRef<GShellServiceState> + AsMut<GShellServiceState>,
+    Deps: TerminalEnginePort + AsRef<GShellServiceState> + AsMut<GShellServiceState>,
 {
     fn active_id(&self) -> GShellId {
         self.prj_ref().as_ref().active()
@@ -141,11 +168,12 @@ where
             return Ok(GShellPtyEvent::EnterGNative(request));
         }
 
-        self.prj_ref_mut()
-            .as_mut()
-            .apply_pty_output_bytes(id, &bytes)?;
+        let responses = self
+            .prj_ref_mut()
+            .update_terminal_output(id, &bytes)?
+            .responses;
 
-        Ok(GShellPtyEvent::Output(bytes))
+        Ok(GShellPtyEvent::Output { id, responses })
     }
 
     pub fn enter_gnative(&mut self, id: GShellId, request: GRequest) -> PtyResult<()> {
@@ -190,9 +218,17 @@ where
     }
 }
 
+fn terminal_cell_width(font_size: f32) -> f32 {
+    (font_size * TERMINAL_CELL_WIDTH_SCALE).max(1.0)
+}
+
+fn terminal_line_height(font_size: f32) -> f32 {
+    (font_size * TERMINAL_LINE_HEIGHT_SCALE).max(1.0)
+}
+
 impl<Deps> GShellService<Deps>
 where
-    Deps: PtyPort + AsRef<GShellServiceState> + AsMut<GShellServiceState>,
+    Deps: PtyPort + TerminalEnginePort + AsRef<GShellServiceState> + AsMut<GShellServiceState>,
 {
     /// Starts a GShell in PtyMode through a PTY port.
     pub fn spawn(&mut self) -> PtyResult<GShellId> {
@@ -207,6 +243,17 @@ where
         };
 
         if let Err(err) = self.prj_ref_mut().spawn(id) {
+            self.prj_ref_mut()
+                .as_mut()
+                .rollback_insert(id, previous_active);
+
+            return Err(err);
+        }
+
+        let size = default_terminal_size(self.prj_ref().as_ref().terminal_font_size());
+
+        if let Err(err) = self.prj_ref_mut().create_terminal(id, size) {
+            self.prj_ref_mut().close(id)?;
             self.prj_ref_mut()
                 .as_mut()
                 .rollback_insert(id, previous_active);
@@ -256,6 +303,9 @@ where
             return Err(PtyError::SessionNotFound);
         }
 
+        let terminal_size = terminal_size(size, self.prj_ref().as_ref().terminal_font_size());
+        let _ = self.prj_ref_mut().resize_terminal(id, terminal_size)?;
+
         self.prj_ref_mut().resize(id, size)
     }
 
@@ -271,12 +321,52 @@ where
         }
 
         self.prj_ref_mut().close(id)?;
+        self.prj_ref_mut().remove_terminal(id)?;
         self.prj_ref_mut().as_mut().remove(id)
     }
 
     pub fn close_active(&mut self) -> PtyResult<CloseShellResult> {
         let id = self.active_id();
         self.close(id)
+    }
+}
+
+pub fn terminal_screen<Deps>(deps: &Deps, id: GShellId) -> PtyResult<&TerminalScreen>
+where
+    Deps: TerminalEnginePort,
+{
+    deps.terminal_screen(id)
+}
+
+pub fn resize_terminal_engine<Deps>(
+    deps: &mut Deps,
+    id: GShellId,
+    size: PtySize,
+    font_size: f32,
+) -> PtyResult<()>
+where
+    Deps: TerminalEnginePort,
+{
+    let _ = deps.resize_terminal(id, terminal_size(size, font_size))?;
+    Ok(())
+}
+
+fn default_terminal_size(font_size: f32) -> TerminalSize {
+    terminal_size(
+        PtySize {
+            cols: DEFAULT_TERMINAL_COLS,
+            rows: DEFAULT_TERMINAL_ROWS,
+        },
+        font_size,
+    )
+}
+
+pub fn terminal_size(size: PtySize, font_size: f32) -> TerminalSize {
+    TerminalSize {
+        cols: size.cols,
+        rows: size.rows,
+        cell_width: terminal_cell_width(font_size).round().max(1.0) as u16,
+        cell_height: terminal_line_height(font_size).round().max(1.0) as u16,
     }
 }
 

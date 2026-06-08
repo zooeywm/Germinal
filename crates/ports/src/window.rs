@@ -1,4 +1,4 @@
-use germinal_domain::rendering::RenderFrame;
+use germinal_domain::{gshell::GShellId, rendering::RenderFrame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowSize {
@@ -57,6 +57,10 @@ pub trait WindowEventHandler {
 
     fn handle_window_event(&mut self, event: WindowEvent) -> WindowEventResult;
 
+    fn handle_pty_output(&mut self, _id: GShellId, _bytes: Vec<u8>) -> WindowEventResult {
+        WindowEventResult::continue_without_frame()
+    }
+
     fn take_pending_frame(&mut self) -> Option<RenderFrame> {
         None
     }
@@ -68,7 +72,7 @@ pub trait WindowEventHandler {
 
 pub trait WindowEventProxy {
     fn request_redraw(&self);
-    fn notify_pty_output(&self);
+    fn notify_pty_output(&self, id: GShellId, bytes: Vec<u8>);
     fn request_exit(&self);
 }
 

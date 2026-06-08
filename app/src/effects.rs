@@ -19,6 +19,7 @@ use crate::container::GerminalApp;
 pub struct RuntimeEffectExecutor {
     write_queue: Rc<RefCell<PtyWriteQueue>>,
     read_state: Rc<RefCell<PtyReadState>>,
+    startup: Option<PtyRuntimeStartup>,
 }
 
 struct PtyWriteQueue {
@@ -28,6 +29,12 @@ struct PtyWriteQueue {
 
 struct PtyReadState {
     window_proxy: Option<WinitWindowEventProxy>,
+}
+
+struct PtyRuntimeStartup {
+    pty_reader: UnixPtyReader,
+    pty_writer: UnixPtyWriter,
+    initial_id: GShellId,
 }
 
 struct PtyWriteWorker {
@@ -41,9 +48,15 @@ struct PtyReadLoop {
     active_id: GShellId,
 }
 
-struct PtyWriteCommand {
-    id: GShellId,
-    bytes: Vec<u8>,
+enum PtyWriteCommand {
+    Write {
+        id: GShellId,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        id: GShellId,
+        size: germinal_ports::pty::PtySize,
+    },
 }
 
 impl RuntimeEffectExecutor {
@@ -56,33 +69,20 @@ impl RuntimeEffectExecutor {
         }));
         let read_state = Rc::new(RefCell::new(PtyReadState { window_proxy: None }));
 
-        compio::runtime::spawn(
-            PtyWriteWorker {
-                queue: write_queue.clone(),
-                pty_writer,
-            }
-            .run(),
-        )
-        .detach();
-
-        compio::runtime::spawn(
-            PtyReadLoop {
-                state: read_state.clone(),
-                pty_reader,
-                active_id: initial_id,
-            }
-            .run(),
-        )
-        .detach();
-
         Ok(Self {
             write_queue,
             read_state,
+            startup: Some(PtyRuntimeStartup {
+                pty_reader,
+                pty_writer,
+                initial_id,
+            }),
         })
     }
 
     pub fn set_window_event_proxy(&mut self, proxy: WinitWindowEventProxy) {
         self.read_state.borrow_mut().window_proxy = Some(proxy);
+        self.start_pty_tasks();
     }
 
     pub fn apply(&mut self, app: &mut GerminalApp, effects: Vec<RuntimeEffect>) {
@@ -94,7 +94,15 @@ impl RuntimeEffectExecutor {
                         continue;
                     }
 
-                    self.enqueue_write(PtyWriteCommand { id, bytes });
+                    self.enqueue_write(PtyWriteCommand::Write { id, bytes });
+                }
+                RuntimeEffect::ResizePty { id, size } => {
+                    if !app.as_ref().contains(id) {
+                        eprintln!("failed to resize PTY: session not found");
+                        continue;
+                    }
+
+                    self.enqueue_write(PtyWriteCommand::Resize { id, size });
                 }
             }
         }
@@ -111,6 +119,31 @@ impl RuntimeEffectExecutor {
             waker.wake();
         }
     }
+
+    fn start_pty_tasks(&mut self) {
+        let Some(startup) = self.startup.take() else {
+            return;
+        };
+
+        compio::runtime::spawn(
+            PtyWriteWorker {
+                queue: self.write_queue.clone(),
+                pty_writer: startup.pty_writer,
+            }
+            .run(),
+        )
+        .detach();
+
+        compio::runtime::spawn(
+            PtyReadLoop {
+                state: self.read_state.clone(),
+                pty_reader: startup.pty_reader,
+                active_id: startup.initial_id,
+            }
+            .run(),
+        )
+        .detach();
+    }
 }
 
 impl PtyWriteWorker {
@@ -118,8 +151,17 @@ impl PtyWriteWorker {
         loop {
             let command = self.next_command().await;
 
-            if let Err(err) = self.pty_writer.write(command.id, &command.bytes).await {
-                eprintln!("failed to write PTY input: {err:?}");
+            match command {
+                PtyWriteCommand::Write { id, bytes } => {
+                    if let Err(err) = self.pty_writer.write(id, &bytes).await {
+                        eprintln!("failed to write PTY input: {err:?}");
+                    }
+                }
+                PtyWriteCommand::Resize { id, size } => {
+                    if let Err(err) = self.pty_writer.resize(id, size) {
+                        eprintln!("failed to resize PTY: {err:?}");
+                    }
+                }
             }
         }
     }
@@ -144,9 +186,9 @@ impl PtyReadLoop {
         loop {
             match self.pty_reader.read(self.active_id).await {
                 Ok(bytes) if bytes.is_empty() => {}
-                Ok(_bytes) => {
+                Ok(bytes) => {
                     if let Some(proxy) = self.state.borrow().window_proxy.clone() {
-                        proxy.notify_pty_output();
+                        proxy.notify_pty_output(self.active_id, bytes);
                     }
                 }
                 Err(err) => {

@@ -1,4 +1,4 @@
-use crate::gshell::{GNativeSession, GShellId, PtySession};
+use crate::gshell::{GNativeSession, GShellId};
 
 /// Aggregate root of the GShell context.
 ///
@@ -6,7 +6,6 @@ use crate::gshell::{GNativeSession, GShellId, PtySession};
 /// It only keeps domain state and does not own real PTY, ConPTY, renderer, or OS resources.
 pub struct GShell {
     id: GShellId,
-    pty_session: PtySession,
     gnative_session: Option<GNativeSession>,
     active_mode: GShellMode,
 }
@@ -19,7 +18,6 @@ impl GShell {
     pub fn new(id: GShellId) -> Self {
         Self {
             id,
-            pty_session: PtySession::new(),
             gnative_session: None,
             active_mode: GShellMode::Pty,
         }
@@ -70,10 +68,6 @@ impl GShell {
                 }
             }
         }
-    }
-
-    pub fn apply_pty_output_bytes(&mut self, bytes: &[u8]) {
-        self.pty_session.apply_output_bytes(bytes);
     }
 }
 

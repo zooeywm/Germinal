@@ -1,9 +1,9 @@
 use crate::{
     gnative::render_gnative_request,
-    gshell::{GShellPtyEvent, GShellService, GShellServiceState},
+    gshell::{GShellPtyEvent, GShellServiceState},
 };
 use germinal_ports::{
-    pty::{GShellId, PtyPort, PtyResult},
+    pty::{GShellId, PtyResult},
     renderer::{Color, RenderCommand, RenderFrame},
     window::{KeyCode, KeyState, KeyboardInput, WindowEvent},
 };
@@ -88,6 +88,13 @@ impl<Deps> GerminalRuntime<Deps>
 where
     Deps: AsRef<GShellServiceState> + AsMut<GShellServiceState>,
 {
+    pub fn handle_event(&mut self, event: RuntimeEvent) -> PtyResult<RuntimeEventResult> {
+        match event {
+            RuntimeEvent::Pty(event) => self.handle_pty_event_result(event),
+            RuntimeEvent::Shutdown => Ok(RuntimeEventResult::exit()),
+        }
+    }
+
     pub fn handle_window_event(&mut self, event: WindowEvent) -> RuntimeEventResult {
         match event {
             WindowEvent::CloseRequested => RuntimeEventResult::exit(),
@@ -126,29 +133,6 @@ where
                     Ok(RuntimeEventResult::continue_without_frame())
                 }
             }
-        }
-    }
-}
-
-impl<Deps> GerminalRuntime<Deps>
-where
-    Deps: PtyPort + AsRef<GShellServiceState> + AsMut<GShellServiceState>,
-{
-    async fn poll_event(&mut self) -> PtyResult<RuntimeEvent> {
-        let gshell_service = GShellService::inj_ref_mut(self.prj_ref_mut());
-
-        let event = gshell_service.read_active_pty_event().await?;
-
-        Ok(RuntimeEvent::Pty(event))
-    }
-
-    fn handle_event(&mut self, event: RuntimeEvent) -> PtyResult<RuntimeControlFlow> {
-        match event {
-            RuntimeEvent::Pty(event) => {
-                let result = self.handle_pty_event_result(event)?;
-                Ok(result.control_flow)
-            }
-            RuntimeEvent::Shutdown => Ok(RuntimeControlFlow::Exit),
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
 use germinal_ports::{
     renderer::RendererPort,
@@ -14,6 +14,7 @@ use winit::{
     event::{ElementState, KeyEvent, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{Key, NamedKey},
+    platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -22,7 +23,7 @@ use crate::renderer::WgpuRendererBackend;
 pub struct GerminalWindowApp<Handler> {
     handler: Handler,
     window: Option<Arc<Window>>,
-    gpu: Option<WgpuRendererBackend>,
+    gpu: Rc<RefCell<Option<WgpuRendererBackend>>>,
     modifiers: KeyModifiers,
 }
 
@@ -34,13 +35,13 @@ where
         Self {
             handler,
             window: None,
-            gpu: None,
+            gpu: Rc::new(RefCell::new(None)),
             modifiers: KeyModifiers::default(),
         }
     }
 
-    pub fn run(mut self) {
-        let event_loop = EventLoop::<GerminalWindowUserEvent>::with_user_event()
+    pub async fn run(mut self) {
+        let mut event_loop = EventLoop::<GerminalWindowUserEvent>::with_user_event()
             .build()
             .expect("failed to create winit event loop");
 
@@ -48,12 +49,19 @@ where
 
         self.handler
             .set_window_event_proxy(WinitWindowEventProxy::new(proxy));
+        self.handler.start();
 
-        event_loop.set_control_flow(ControlFlow::Wait);
+        event_loop.set_control_flow(ControlFlow::Poll);
 
-        event_loop
-            .run_app(&mut self)
-            .expect("failed to run winit event loop");
+        loop {
+            let status = event_loop.pump_app_events(Some(Duration::ZERO), &mut self);
+
+            if matches!(status, PumpStatus::Exit(_)) || self.handler.should_exit() {
+                break;
+            }
+
+            compio::runtime::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 
     fn handle_germinal_window_event(
@@ -63,7 +71,7 @@ where
     ) -> WindowEventResult {
         let result = self.handler.handle_window_event(event);
 
-        if result.control_flow == WindowControlFlow::Exit {
+        if result.control_flow == WindowControlFlow::Exit || self.handler.should_exit() {
             event_loop.exit();
         }
 
@@ -91,14 +99,20 @@ where
                 .expect("failed to create Germinal window"),
         );
 
-        let runtime = compio::runtime::Runtime::new().expect("failed to create compio runtime");
-
-        let gpu = runtime.block_on(WgpuRendererBackend::new(window.clone()));
+        let gpu = self.gpu.clone();
+        compio::runtime::spawn({
+            let window = window.clone();
+            async move {
+                let renderer = WgpuRendererBackend::new(window.clone()).await;
+                *gpu.borrow_mut() = Some(renderer);
+                window.request_redraw();
+            }
+        })
+        .detach();
 
         window.request_redraw();
 
         self.window = Some(window);
-        self.gpu = Some(gpu);
     }
 
     fn window_event(
@@ -121,7 +135,7 @@ where
                     }),
                 );
 
-                if let Some(gpu) = &mut self.gpu {
+                if let Some(gpu) = self.gpu.borrow_mut().as_mut() {
                     gpu.resize(size);
                 }
 
@@ -130,24 +144,24 @@ where
                 }
             }
             WindowEvent::RedrawRequested => {
-                let result = self
-                    .handle_germinal_window_event(event_loop, GerminalWindowEvent::RedrawRequested);
+                if let Some(frame) = self.handler.take_pending_frame() {
+                    if let Some(gpu) = self.gpu.borrow_mut().as_mut() {
+                        gpu.render(&frame);
+                    }
 
-                if let (Some(gpu), Some(frame)) = (&mut self.gpu, result.frame) {
-                    gpu.render(&frame);
+                    return;
                 }
+
+                let _ = self
+                    .handle_germinal_window_event(event_loop, GerminalWindowEvent::RedrawRequested);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let input = map_keyboard_input(&event, self.modifiers);
 
-                let result = self.handle_germinal_window_event(
+                let _ = self.handle_germinal_window_event(
                     event_loop,
                     GerminalWindowEvent::KeyboardInput(input),
                 );
-
-                if let (Some(gpu), Some(frame)) = (&mut self.gpu, result.frame) {
-                    gpu.render(&frame);
-                }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 let state = modifiers.state();
@@ -174,6 +188,9 @@ where
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+            }
+            GerminalWindowUserEvent::Exit => {
+                _event_loop.exit();
             }
         }
     }
@@ -212,8 +229,10 @@ fn map_keyboard_input(event: &KeyEvent, modifiers: KeyModifiers) -> GerminalKeyb
 pub enum GerminalWindowUserEvent {
     RequestRedraw,
     PtyOutput,
+    Exit,
 }
 
+#[derive(Clone)]
 pub struct WinitWindowEventProxy {
     proxy: EventLoopProxy<GerminalWindowUserEvent>,
 }
@@ -233,5 +252,9 @@ impl WindowEventProxy for WinitWindowEventProxy {
 
     fn notify_pty_output(&self) {
         let _ = self.proxy.send_event(GerminalWindowUserEvent::PtyOutput);
+    }
+
+    fn request_exit(&self) {
+        let _ = self.proxy.send_event(GerminalWindowUserEvent::Exit);
     }
 }

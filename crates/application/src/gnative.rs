@@ -1,7 +1,5 @@
 use germinal_domain::{
-    gshell::{
-        Color as SurfaceColor, GNativeAppName, GRequest, GNativeSurface, SurfaceCommand,
-    },
+    gshell::{Color as SurfaceColor, GNativeAppName, GNativeSurface, GRequest, SurfaceCommand},
     rendering::{Color as RenderColor, RenderCommand, RenderFrame},
 };
 

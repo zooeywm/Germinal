@@ -51,14 +51,25 @@ impl WindowEventResult {
 pub trait WindowEventHandler {
     type Proxy: WindowEventProxy;
 
+    fn start(&mut self) {}
+
     fn set_window_event_proxy(&mut self, _proxy: Self::Proxy) {}
 
     fn handle_window_event(&mut self, event: WindowEvent) -> WindowEventResult;
+
+    fn take_pending_frame(&mut self) -> Option<RenderFrame> {
+        None
+    }
+
+    fn should_exit(&self) -> bool {
+        false
+    }
 }
 
 pub trait WindowEventProxy {
     fn request_redraw(&self);
     fn notify_pty_output(&self);
+    fn request_exit(&self);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

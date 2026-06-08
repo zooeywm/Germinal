@@ -121,6 +121,77 @@ impl Default for GShellServiceState {
 
 impl<Deps> GShellService<Deps>
 where
+    Deps: AsRef<GShellServiceState> + AsMut<GShellServiceState>,
+{
+    fn active_id(&self) -> GShellId {
+        self.prj_ref().as_ref().active()
+    }
+
+    pub fn handle_pty_output_bytes(
+        &mut self,
+        id: GShellId,
+        bytes: Vec<u8>,
+    ) -> PtyResult<GShellPtyEvent> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        if let Some(request) = detect_gnative_request(&bytes) {
+            self.enter_gnative(id, request.clone())?;
+            return Ok(GShellPtyEvent::EnterGNative(request));
+        }
+
+        self.prj_ref_mut()
+            .as_mut()
+            .apply_pty_output_bytes(id, &bytes)?;
+
+        Ok(GShellPtyEvent::Output(bytes))
+    }
+
+    pub fn enter_gnative(&mut self, id: GShellId, request: GRequest) -> PtyResult<()> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        match request {
+            GRequest::EnterGNative { .. } => {
+                let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
+                let shell = state.shell_mut(id)?;
+
+                shell.initialize_gnative();
+                shell.enter_gnative();
+
+                Ok(())
+            }
+        }
+    }
+
+    pub fn enter_active_gnative(&mut self, request: GRequest) -> PtyResult<()> {
+        let id = self.active_id();
+        self.enter_gnative(id, request)
+    }
+
+    pub fn exit_gnative(&mut self, id: GShellId) -> PtyResult<()> {
+        if !self.prj_ref().as_ref().contains(id) {
+            return Err(PtyError::SessionNotFound);
+        }
+
+        let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
+        let shell = state.shell_mut(id)?;
+
+        shell.exit_gnative();
+
+        Ok(())
+    }
+
+    pub fn exit_active_gnative(&mut self) -> PtyResult<()> {
+        let id = self.active_id();
+        self.exit_gnative(id)
+    }
+}
+
+impl<Deps> GShellService<Deps>
+where
     Deps: PtyPort + AsRef<GShellServiceState> + AsMut<GShellServiceState>,
 {
     /// Starts a GShell in PtyMode through a PTY port.
@@ -150,10 +221,6 @@ where
         self.prj_ref_mut().as_mut().activate(id)
     }
 
-    fn active_id(&self) -> GShellId {
-        self.prj_ref().as_ref().active()
-    }
-
     pub async fn read_pty_event(&mut self, id: GShellId) -> PtyResult<GShellPtyEvent> {
         if !self.prj_ref().as_ref().contains(id) {
             return Err(PtyError::SessionNotFound);
@@ -161,16 +228,7 @@ where
 
         let bytes = self.prj_ref_mut().read(id).await?;
 
-        if let Some(request) = detect_gnative_request(&bytes) {
-            self.enter_gnative(id, request.clone())?;
-            return Ok(GShellPtyEvent::EnterGNative(request));
-        }
-
-        self.prj_ref_mut()
-            .as_mut()
-            .apply_pty_output_bytes(id, &bytes)?;
-
-        Ok(GShellPtyEvent::Output(bytes))
+        self.handle_pty_output_bytes(id, bytes)
     }
 
     pub async fn read_active_pty_event(&mut self) -> PtyResult<GShellPtyEvent> {
@@ -219,47 +277,6 @@ where
     pub fn close_active(&mut self) -> PtyResult<CloseShellResult> {
         let id = self.active_id();
         self.close(id)
-    }
-
-    pub fn exit_gnative(&mut self, id: GShellId) -> PtyResult<()> {
-        if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::SessionNotFound);
-        }
-
-        let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
-        let shell = state.shell_mut(id)?;
-
-        shell.exit_gnative();
-
-        Ok(())
-    }
-
-    pub fn exit_active_gnative(&mut self) -> PtyResult<()> {
-        let id = self.active_id();
-        self.exit_gnative(id)
-    }
-
-    pub fn enter_gnative(&mut self, id: GShellId, request: GRequest) -> PtyResult<()> {
-        if !self.prj_ref().as_ref().contains(id) {
-            return Err(PtyError::SessionNotFound);
-        }
-
-        match request {
-            GRequest::EnterGNative { .. } => {
-                let state: &mut GShellServiceState = self.prj_ref_mut().as_mut();
-                let shell = state.shell_mut(id)?;
-
-                shell.initialize_gnative();
-                shell.enter_gnative();
-
-                Ok(())
-            }
-        }
-    }
-
-    pub fn enter_active_gnative(&mut self, request: GRequest) -> PtyResult<()> {
-        let id = self.active_id();
-        self.enter_gnative(id, request)
     }
 }
 

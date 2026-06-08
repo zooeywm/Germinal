@@ -11,6 +11,7 @@ pub enum WindowEvent {
     CloseRequested,
     Resized(WindowSize),
     RedrawRequested,
+    KeyboardInput(KeyboardInput),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,5 +49,48 @@ impl WindowEventResult {
 }
 
 pub trait WindowEventHandler {
+    type Proxy: WindowEventProxy;
+
+    fn set_window_event_proxy(&mut self, _proxy: Self::Proxy) {}
+
     fn handle_window_event(&mut self, event: WindowEvent) -> WindowEventResult;
+}
+
+pub trait WindowEventProxy {
+    fn request_redraw(&self);
+    fn notify_pty_output(&self);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCode {
+    Enter,
+    Backspace,
+    Escape,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Character(char),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub logo: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyboardInput {
+    pub state: KeyState,
+    pub key: KeyCode,
+    pub modifiers: KeyModifiers,
 }

@@ -3,15 +3,17 @@ use std::sync::Arc;
 use germinal_ports::{
     renderer::RendererPort,
     window::{
-        WindowControlFlow, WindowEvent as GerminalWindowEvent, WindowEventHandler,
+        KeyCode, KeyModifiers, KeyState, KeyboardInput as GerminalKeyboardInput, WindowControlFlow,
+        WindowEvent as GerminalWindowEvent, WindowEventHandler, WindowEventProxy,
         WindowEventResult, WindowSize,
     },
 };
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event::{ElementState, KeyEvent, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    keyboard::{Key, NamedKey},
     window::{Window, WindowAttributes, WindowId},
 };
 
@@ -21,28 +23,36 @@ pub struct GerminalWindowApp<Handler> {
     handler: Handler,
     window: Option<Arc<Window>>,
     gpu: Option<WgpuRendererBackend>,
+    modifiers: KeyModifiers,
 }
 
 impl<Handler> GerminalWindowApp<Handler>
 where
-    Handler: WindowEventHandler,
+    Handler: WindowEventHandler<Proxy = WinitWindowEventProxy>,
 {
     pub fn new(handler: Handler) -> Self {
         Self {
             handler,
             window: None,
             gpu: None,
+            modifiers: KeyModifiers::default(),
         }
     }
 
-    pub fn run(self) {
-        let event_loop = EventLoop::new().expect("failed to create winit event loop");
+    pub fn run(mut self) {
+        let event_loop = EventLoop::<GerminalWindowUserEvent>::with_user_event()
+            .build()
+            .expect("failed to create winit event loop");
+
+        let proxy = event_loop.create_proxy();
+
+        self.handler
+            .set_window_event_proxy(WinitWindowEventProxy::new(proxy));
+
         event_loop.set_control_flow(ControlFlow::Wait);
 
-        let mut app = self;
-
         event_loop
-            .run_app(&mut app)
+            .run_app(&mut self)
             .expect("failed to run winit event loop");
     }
 
@@ -61,9 +71,9 @@ where
     }
 }
 
-impl<Handler> ApplicationHandler for GerminalWindowApp<Handler>
+impl<Handler> ApplicationHandler<GerminalWindowUserEvent> for GerminalWindowApp<Handler>
 where
-    Handler: WindowEventHandler,
+    Handler: WindowEventHandler<Proxy = WinitWindowEventProxy>,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -127,7 +137,101 @@ where
                     gpu.render(&frame);
                 }
             }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let input = map_keyboard_input(&event, self.modifiers);
+
+                let result = self.handle_germinal_window_event(
+                    event_loop,
+                    GerminalWindowEvent::KeyboardInput(input),
+                );
+
+                if let (Some(gpu), Some(frame)) = (&mut self.gpu, result.frame) {
+                    gpu.render(&frame);
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                let state = modifiers.state();
+
+                self.modifiers = KeyModifiers {
+                    ctrl: state.control_key(),
+                    alt: state.alt_key(),
+                    shift: state.shift_key(),
+                    logo: state.super_key(),
+                };
+            }
             _ => {}
         }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: GerminalWindowUserEvent) {
+        match event {
+            GerminalWindowUserEvent::RequestRedraw => {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            GerminalWindowUserEvent::PtyOutput => {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+}
+
+fn map_keyboard_input(event: &KeyEvent, modifiers: KeyModifiers) -> GerminalKeyboardInput {
+    let state = match event.state {
+        ElementState::Pressed => KeyState::Pressed,
+        ElementState::Released => KeyState::Released,
+    };
+
+    let key = match &event.logical_key {
+        Key::Named(NamedKey::Enter) => KeyCode::Enter,
+        Key::Named(NamedKey::Backspace) => KeyCode::Backspace,
+        Key::Named(NamedKey::Escape) => KeyCode::Escape,
+        Key::Named(NamedKey::ArrowUp) => KeyCode::ArrowUp,
+        Key::Named(NamedKey::ArrowDown) => KeyCode::ArrowDown,
+        Key::Named(NamedKey::ArrowLeft) => KeyCode::ArrowLeft,
+        Key::Named(NamedKey::ArrowRight) => KeyCode::ArrowRight,
+        Key::Character(text) => text
+            .chars()
+            .next()
+            .map(KeyCode::Character)
+            .unwrap_or(KeyCode::Unknown),
+        _ => KeyCode::Unknown,
+    };
+
+    GerminalKeyboardInput {
+        state,
+        key,
+        modifiers,
+    }
+}
+
+#[derive(Debug)]
+pub enum GerminalWindowUserEvent {
+    RequestRedraw,
+    PtyOutput,
+}
+
+pub struct WinitWindowEventProxy {
+    proxy: EventLoopProxy<GerminalWindowUserEvent>,
+}
+
+impl WinitWindowEventProxy {
+    fn new(proxy: EventLoopProxy<GerminalWindowUserEvent>) -> Self {
+        Self { proxy }
+    }
+}
+
+impl WindowEventProxy for WinitWindowEventProxy {
+    fn request_redraw(&self) {
+        let _ = self
+            .proxy
+            .send_event(GerminalWindowUserEvent::RequestRedraw);
+    }
+
+    fn notify_pty_output(&self) {
+        let _ = self.proxy.send_event(GerminalWindowUserEvent::PtyOutput);
     }
 }

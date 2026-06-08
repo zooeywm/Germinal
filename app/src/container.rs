@@ -1,30 +1,27 @@
 use germinal_application::gshell::GShellServiceState;
-use germinal_domain::{gshell::GShellId, rendering::RenderFrame};
-use germinal_infra::{pty::UnixPty, renderer::FakeRenderer};
-use germinal_ports::{
-    pty::{PtyPort, PtyResult, PtySize},
-    renderer::RendererPort,
-};
+use germinal_domain::rendering::RenderFrame;
+use germinal_infra::renderer::FakeRenderer;
+use germinal_ports::renderer::RendererPort;
 
 pub struct GerminalApp {
-    pty_backend: UnixPty,
     renderer_backend: FakeRenderer,
     gshell_service_state: GShellServiceState,
 }
 
 impl GerminalApp {
-    pub fn new() -> PtyResult<Self> {
-        let mut pty_backend = UnixPty::new();
+    pub fn new() -> Self {
         let gshell_service_state = GShellServiceState::new();
 
-        let initial_id = gshell_service_state.active();
-        pty_backend.spawn(initial_id)?;
-
-        Ok(Self {
-            pty_backend,
+        Self {
             renderer_backend: FakeRenderer,
             gshell_service_state,
-        })
+        }
+    }
+}
+
+impl RendererPort for GerminalApp {
+    fn render(&mut self, frame: &RenderFrame) {
+        self.renderer_backend.render(frame);
     }
 }
 
@@ -37,33 +34,5 @@ impl AsRef<GShellServiceState> for GerminalApp {
 impl AsMut<GShellServiceState> for GerminalApp {
     fn as_mut(&mut self) -> &mut GShellServiceState {
         &mut self.gshell_service_state
-    }
-}
-
-impl PtyPort for GerminalApp {
-    fn spawn(&mut self, id: GShellId) -> PtyResult<()> {
-        self.pty_backend.spawn(id)
-    }
-
-    async fn write(&mut self, id: GShellId, bytes: &[u8]) -> PtyResult<()> {
-        self.pty_backend.write(id, bytes).await
-    }
-
-    async fn read(&mut self, id: GShellId) -> PtyResult<Vec<u8>> {
-        self.pty_backend.read(id).await
-    }
-
-    fn resize(&mut self, id: GShellId, size: PtySize) -> PtyResult<()> {
-        self.pty_backend.resize(id, size)
-    }
-
-    fn close(&mut self, id: GShellId) -> PtyResult<()> {
-        self.pty_backend.close(id)
-    }
-}
-
-impl RendererPort for GerminalApp {
-    fn render(&mut self, frame: &RenderFrame) {
-        self.renderer_backend.render(frame);
     }
 }

@@ -6,7 +6,10 @@ use std::{
     task::{Poll, Waker},
 };
 
-use germinal_application::runtime::{GerminalRuntime, RuntimeControlFlow, RuntimeEventResult};
+use germinal_application::{
+    gshell::GShellServiceState,
+    runtime::{GerminalRuntime, RuntimeControlFlow, RuntimeEventResult},
+};
 use germinal_domain::rendering::RenderFrame;
 use germinal_infra::window::WinitWindowEventProxy;
 use germinal_ports::window::{
@@ -37,6 +40,9 @@ struct GerminalRuntimeHostRunner {
 
 impl GerminalRuntimeHost {
     pub fn new() -> Self {
+        let app = GerminalApp::new();
+        let initial_id = <GerminalApp as AsRef<GShellServiceState>>::as_ref(&app).active();
+
         Self {
             shared: Rc::new(RefCell::new(GerminalRuntimeHostShared {
                 events: VecDeque::new(),
@@ -45,8 +51,11 @@ impl GerminalRuntimeHost {
                 window_proxy: None,
                 waker: None,
             })),
-            app: Some(GerminalApp::new().expect("failed to create GerminalApp")),
-            effect_executor: Some(RuntimeEffectExecutor::new()),
+            app: Some(app),
+            effect_executor: Some(
+                RuntimeEffectExecutor::new(initial_id)
+                    .expect("failed to create RuntimeEffectExecutor"),
+            ),
         }
     }
 
@@ -66,7 +75,7 @@ impl GerminalRuntimeHost {
 impl GerminalRuntimeHostRunner {
     async fn run(mut self) {
         while let Some(event) = self.next_event().await {
-            let result = self.handle_window_event_async(event).await;
+            let result = self.handle_window_event(event);
             let should_exit = result.control_flow == WindowControlFlow::Exit;
             let (proxy, should_redraw) = self.commit_window_event_result(result);
 
@@ -100,14 +109,14 @@ impl GerminalRuntimeHostRunner {
         .await
     }
 
-    async fn handle_window_event_async(&mut self, event: WindowEvent) -> WindowEventResult {
+    fn handle_window_event(&mut self, event: WindowEvent) -> WindowEventResult {
         let RuntimeEventResult {
             control_flow,
             frame,
             effects,
         } = self.update_window_event(event);
 
-        self.effect_executor.apply(&mut self.app, effects).await;
+        self.effect_executor.apply(&mut self.app, effects);
 
         Self::window_event_result(control_flow, frame)
     }

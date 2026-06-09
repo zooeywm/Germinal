@@ -310,6 +310,7 @@ fn render_pty_screen(screen: &TerminalScreen, font_size: f32) -> RenderFrame {
 
     for (row, cells) in screen.cells().chunks(cols).enumerate() {
         render_background_runs(&mut frame, row, cells, cell_width, line_height);
+        render_block_cells(&mut frame, row, cells, cell_width, line_height);
         render_text_runs(&mut frame, row, cells, font_size, cell_width, line_height);
     }
 
@@ -347,6 +348,73 @@ fn render_background_runs(
     }
 }
 
+fn render_block_cells(
+    frame: &mut RenderFrame,
+    row: usize,
+    cells: &[TerminalCell],
+    cell_width: f32,
+    line_height: f32,
+) {
+    let mut col = 0;
+
+    while col < cells.len() {
+        let cell = &cells[col];
+
+        if cell.is_continuation() {
+            col += 1;
+            continue;
+        }
+
+        let Some(foreground) = cell.foreground().map(render_color) else {
+            col += 1;
+            continue;
+        };
+
+        if is_horizontal_block_char(cell.ch()) {
+            let start = col;
+
+            while col < cells.len()
+                && !cells[col].is_continuation()
+                && cells[col].ch() == cell.ch()
+                && cells[col].foreground() == cell.foreground()
+            {
+                col += 1;
+            }
+
+            let x = TERMINAL_X + start as f32 * cell_width;
+            let y = TERMINAL_Y + row as f32 * line_height;
+            let width = (col - start) as f32 * cell_width;
+
+            push_horizontal_block_rect(
+                frame,
+                cell.ch(),
+                x,
+                y,
+                width,
+                line_height,
+                Some(foreground),
+                None,
+            );
+            continue;
+        }
+
+        let x = TERMINAL_X + col as f32 * cell_width;
+        let y = TERMINAL_Y + row as f32 * line_height;
+
+        push_block_cell_rects(
+            frame,
+            cell.ch(),
+            x,
+            y,
+            cell_width,
+            line_height,
+            Some(foreground),
+            None,
+        );
+        col += 1;
+    }
+}
+
 fn render_text_runs(
     frame: &mut RenderFrame,
     row: usize,
@@ -358,17 +426,32 @@ fn render_text_runs(
     let mut col = 0;
 
     while col < cells.len() {
-        let foreground = cells[col].foreground();
-        let start = col;
-
-        while col < cells.len() && cells[col].foreground() == foreground {
+        while col < cells.len()
+            && (cells[col].is_continuation() || is_block_cell_char(cells[col].ch()))
+        {
             col += 1;
         }
 
-        let content = cells[start..col]
-            .iter()
-            .map(|cell| cell.ch())
-            .collect::<String>();
+        if col >= cells.len() {
+            break;
+        }
+
+        let foreground = cells[col].foreground();
+        let start = col;
+        let mut content = String::new();
+
+        while col < cells.len() && cells[col].foreground() == foreground {
+            if !cells[col].is_continuation() && is_block_cell_char(cells[col].ch()) {
+                break;
+            }
+
+            if !cells[col].is_continuation() {
+                content.push(cells[col].ch());
+            }
+
+            col += 1;
+        }
+
         let content = content.trim_end();
 
         if content.is_empty() {
@@ -392,6 +475,505 @@ fn render_text_runs(
     }
 }
 
+fn push_block_cell_rects(
+    frame: &mut RenderFrame,
+    ch: char,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    foreground: Option<Color>,
+    background: Option<Color>,
+) {
+    let Some(color) = foreground else {
+        if let Some(background) = background {
+            push_cell_rect(frame, x, y, width, height, background);
+        }
+        return;
+    };
+
+    if let Some(mask) = sextant_mask(ch) {
+        if let Some(background) = background {
+            push_cell_rect(frame, x, y, width, height, background);
+        }
+        push_sextant_rects(frame, mask, x, y, width, height, color);
+        return;
+    }
+
+    match ch {
+        '█' => push_cell_rect(frame, x, y, width, height, color),
+        '▁' => push_lower_block(frame, x, y, width, height, 1, color, background),
+        '▂' => push_lower_block(frame, x, y, width, height, 2, color, background),
+        '▃' => push_lower_block(frame, x, y, width, height, 3, color, background),
+        '▀' => push_upper_block(frame, x, y, width, height, 4, color, background),
+        '▄' => push_lower_block(frame, x, y, width, height, 4, color, background),
+        '▅' => push_lower_block(frame, x, y, width, height, 5, color, background),
+        '▆' => push_lower_block(frame, x, y, width, height, 6, color, background),
+        '▇' => push_lower_block(frame, x, y, width, height, 7, color, background),
+        '▔' => push_upper_block(frame, x, y, width, height, 1, color, background),
+        '\u{1fb82}' => push_upper_block(frame, x, y, width, height, 2, color, background),
+        '\u{1fb83}' => push_upper_block(frame, x, y, width, height, 3, color, background),
+        '\u{1fb84}' => push_upper_block(frame, x, y, width, height, 5, color, background),
+        '\u{1fb85}' => push_upper_block(frame, x, y, width, height, 6, color, background),
+        '\u{1fb86}' => push_upper_block(frame, x, y, width, height, 7, color, background),
+        '▏' => push_left_block(frame, x, y, width, height, 1, color, background),
+        '▎' => push_left_block(frame, x, y, width, height, 2, color, background),
+        '▍' => push_left_block(frame, x, y, width, height, 3, color, background),
+        '▌' => push_left_block(frame, x, y, width, height, 4, color, background),
+        '▋' => push_left_block(frame, x, y, width, height, 5, color, background),
+        '▊' => push_left_block(frame, x, y, width, height, 6, color, background),
+        '▉' => push_left_block(frame, x, y, width, height, 7, color, background),
+        '▐' => push_right_block(frame, x, y, width, height, 4, color, background),
+        '▕' => push_right_block(frame, x, y, width, height, 1, color, background),
+        '\u{1fb87}' => push_right_block(frame, x, y, width, height, 2, color, background),
+        '\u{1fb88}' => push_right_block(frame, x, y, width, height, 3, color, background),
+        '\u{1fb89}' => push_right_block(frame, x, y, width, height, 5, color, background),
+        '\u{1fb8a}' => push_right_block(frame, x, y, width, height, 6, color, background),
+        '\u{1fb8b}' => push_right_block(frame, x, y, width, height, 7, color, background),
+        '▖' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y + height / 2.0, width / 2.0, height / 2.0, color);
+        }
+        '▗' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(
+                frame,
+                x + width / 2.0,
+                y + height / 2.0,
+                width / 2.0,
+                height / 2.0,
+                color,
+            );
+        }
+        '▘' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y, width / 2.0, height / 2.0, color);
+        }
+        '▝' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x + width / 2.0, y, width / 2.0, height / 2.0, color);
+        }
+        '▚' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y, width / 2.0, height / 2.0, color);
+            push_cell_rect(
+                frame,
+                x + width / 2.0,
+                y + height / 2.0,
+                width / 2.0,
+                height / 2.0,
+                color,
+            );
+        }
+        '▞' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x + width / 2.0, y, width / 2.0, height / 2.0, color);
+            push_cell_rect(frame, x, y + height / 2.0, width / 2.0, height / 2.0, color);
+        }
+        '▙' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y + height / 2.0, width, height / 2.0, color);
+            push_cell_rect(frame, x, y, width / 2.0, height / 2.0, color);
+        }
+        '▛' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y, width, height / 2.0, color);
+            push_cell_rect(frame, x, y + height / 2.0, width / 2.0, height / 2.0, color);
+        }
+        '▜' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y, width, height / 2.0, color);
+            push_cell_rect(
+                frame,
+                x + width / 2.0,
+                y + height / 2.0,
+                width / 2.0,
+                height / 2.0,
+                color,
+            );
+        }
+        '▟' => {
+            push_optional_background(frame, x, y, width, height, background);
+            push_cell_rect(frame, x, y + height / 2.0, width, height / 2.0, color);
+            push_cell_rect(frame, x + width / 2.0, y, width / 2.0, height / 2.0, color);
+        }
+        '░' => push_shade_block(frame, x, y, width, height, 64, color, background),
+        '▒' => push_shade_block(frame, x, y, width, height, 128, color, background),
+        '▓' => push_shade_block(frame, x, y, width, height, 192, color, background),
+        '\u{1fb8c}' => push_left_shade_block(frame, x, y, width, height, color, background),
+        '\u{1fb8d}' => push_right_shade_block(frame, x, y, width, height, color, background),
+        '\u{1fb8e}' => push_upper_shade_block(frame, x, y, width, height, color, background),
+        '\u{1fb8f}' => push_lower_shade_block(frame, x, y, width, height, color, background),
+        _ => {}
+    }
+}
+
+fn push_sextant_rects(
+    frame: &mut RenderFrame,
+    mask: u8,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+) {
+    let half_width = width / 2.0;
+    let third_height = height / 3.0;
+
+    for bit in 0..6 {
+        if mask & (1 << bit) == 0 {
+            continue;
+        }
+
+        let col = bit % 2;
+        let row = bit / 2;
+
+        push_cell_rect(
+            frame,
+            x + col as f32 * half_width,
+            y + row as f32 * third_height,
+            half_width,
+            third_height,
+            color,
+        );
+    }
+}
+
+fn push_horizontal_block_rect(
+    frame: &mut RenderFrame,
+    ch: char,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    foreground: Option<Color>,
+    background: Option<Color>,
+) {
+    let Some(color) = foreground else {
+        if let Some(background) = background {
+            push_cell_rect(frame, x, y, width, height, background);
+        }
+        return;
+    };
+
+    match ch {
+        '█' => push_cell_rect(frame, x, y, width, height, color),
+        '▁' => push_lower_block(frame, x, y, width, height, 1, color, background),
+        '▂' => push_lower_block(frame, x, y, width, height, 2, color, background),
+        '▃' => push_lower_block(frame, x, y, width, height, 3, color, background),
+        '▀' => push_upper_block(frame, x, y, width, height, 4, color, background),
+        '▄' => push_lower_block(frame, x, y, width, height, 4, color, background),
+        '▅' => push_lower_block(frame, x, y, width, height, 5, color, background),
+        '▆' => push_lower_block(frame, x, y, width, height, 6, color, background),
+        '▇' => push_lower_block(frame, x, y, width, height, 7, color, background),
+        '▔' => push_upper_block(frame, x, y, width, height, 1, color, background),
+        '\u{1fb82}' => push_upper_block(frame, x, y, width, height, 2, color, background),
+        '\u{1fb83}' => push_upper_block(frame, x, y, width, height, 3, color, background),
+        '\u{1fb84}' => push_upper_block(frame, x, y, width, height, 5, color, background),
+        '\u{1fb85}' => push_upper_block(frame, x, y, width, height, 6, color, background),
+        '\u{1fb86}' => push_upper_block(frame, x, y, width, height, 7, color, background),
+        _ => {}
+    }
+}
+
+fn push_cell_rect(frame: &mut RenderFrame, x: f32, y: f32, width: f32, height: f32, color: Color) {
+    frame.push(RenderCommand::FillRect {
+        x,
+        y,
+        width,
+        height,
+        color,
+    });
+}
+
+fn push_optional_background(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    background: Option<Color>,
+) {
+    if let Some(background) = background {
+        push_cell_rect(frame, x, y, width, height, background);
+    }
+}
+
+fn push_shade_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    alpha: u8,
+    color: Color,
+    background: Option<Color>,
+) {
+    push_optional_background(frame, x, y, width, height, background);
+    push_cell_rect(frame, x, y, width, height, Color { a: alpha, ..color });
+}
+
+fn push_left_shade_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+    background: Option<Color>,
+) {
+    push_optional_background(frame, x, y, width, height, background);
+    push_cell_rect(frame, x, y, width / 2.0, height, Color { a: 128, ..color });
+}
+
+fn push_right_shade_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+    background: Option<Color>,
+) {
+    push_optional_background(frame, x, y, width, height, background);
+    push_cell_rect(
+        frame,
+        x + width / 2.0,
+        y,
+        width / 2.0,
+        height,
+        Color { a: 128, ..color },
+    );
+}
+
+fn push_upper_shade_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+    background: Option<Color>,
+) {
+    push_optional_background(frame, x, y, width, height, background);
+    push_cell_rect(frame, x, y, width, height / 2.0, Color { a: 128, ..color });
+}
+
+fn push_lower_shade_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Color,
+    background: Option<Color>,
+) {
+    push_optional_background(frame, x, y, width, height, background);
+    push_cell_rect(
+        frame,
+        x,
+        y + height / 2.0,
+        width,
+        height / 2.0,
+        Color { a: 128, ..color },
+    );
+}
+
+fn push_upper_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    eighths: u8,
+    color: Color,
+    background: Option<Color>,
+) {
+    let block_height = height * f32::from(eighths) / 8.0;
+
+    push_cell_rect(frame, x, y, width, block_height, color);
+
+    if let Some(background) = background {
+        push_cell_rect(
+            frame,
+            x,
+            y + block_height,
+            width,
+            height - block_height,
+            background,
+        );
+    }
+}
+
+fn push_lower_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    eighths: u8,
+    color: Color,
+    background: Option<Color>,
+) {
+    let block_height = height * f32::from(eighths) / 8.0;
+
+    if let Some(background) = background {
+        push_cell_rect(frame, x, y, width, height - block_height, background);
+    }
+
+    push_cell_rect(
+        frame,
+        x,
+        y + height - block_height,
+        width,
+        block_height,
+        color,
+    );
+}
+
+fn push_left_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    eighths: u8,
+    color: Color,
+    background: Option<Color>,
+) {
+    let block_width = width * f32::from(eighths) / 8.0;
+
+    push_cell_rect(frame, x, y, block_width, height, color);
+
+    if let Some(background) = background {
+        push_cell_rect(
+            frame,
+            x + block_width,
+            y,
+            width - block_width,
+            height,
+            background,
+        );
+    }
+}
+
+fn push_right_block(
+    frame: &mut RenderFrame,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    eighths: u8,
+    color: Color,
+    background: Option<Color>,
+) {
+    let block_width = width * f32::from(eighths) / 8.0;
+
+    if let Some(background) = background {
+        push_cell_rect(frame, x, y, width - block_width, height, background);
+    }
+
+    push_cell_rect(
+        frame,
+        x + width - block_width,
+        y,
+        block_width,
+        height,
+        color,
+    );
+}
+
+fn is_block_cell_char(ch: char) -> bool {
+    if sextant_mask(ch).is_some() {
+        return true;
+    }
+
+    matches!(
+        ch,
+        '█' | '▁'
+            | '▂'
+            | '▃'
+            | '▀'
+            | '▄'
+            | '▅'
+            | '▆'
+            | '▇'
+            | '▔'
+            | '\u{1fb82}'
+            | '\u{1fb83}'
+            | '\u{1fb84}'
+            | '\u{1fb85}'
+            | '\u{1fb86}'
+            | '▏'
+            | '▎'
+            | '▍'
+            | '▌'
+            | '▋'
+            | '▊'
+            | '▉'
+            | '▐'
+            | '▕'
+            | '\u{1fb87}'
+            | '\u{1fb88}'
+            | '\u{1fb89}'
+            | '\u{1fb8a}'
+            | '\u{1fb8b}'
+            | '▖'
+            | '▗'
+            | '▘'
+            | '▝'
+            | '▚'
+            | '▞'
+            | '▙'
+            | '▛'
+            | '▜'
+            | '▟'
+            | '░'
+            | '▒'
+            | '▓'
+            | '\u{1fb8c}'
+            | '\u{1fb8d}'
+            | '\u{1fb8e}'
+            | '\u{1fb8f}'
+    )
+}
+
+fn sextant_mask(ch: char) -> Option<u8> {
+    const MASKS: [u8; 60] = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26,
+        27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50,
+        51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62,
+    ];
+
+    let codepoint = ch as u32;
+
+    if !(0x1fb00..=0x1fb3b).contains(&codepoint) {
+        return None;
+    }
+
+    Some(MASKS[(codepoint - 0x1fb00) as usize])
+}
+
+fn is_horizontal_block_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '█' | '▁'
+            | '▂'
+            | '▃'
+            | '▀'
+            | '▄'
+            | '▅'
+            | '▆'
+            | '▇'
+            | '▔'
+            | '\u{1fb82}'
+            | '\u{1fb83}'
+            | '\u{1fb84}'
+            | '\u{1fb85}'
+            | '\u{1fb86}'
+    )
+}
+
 fn render_color(color: TerminalColor) -> Color {
     Color {
         r: color.r,
@@ -413,11 +995,11 @@ fn terminal_grid_size(window_size: WindowSize, font_size: f32) -> PtySize {
 }
 
 fn terminal_cell_width(font_size: f32) -> f32 {
-    (font_size * CELL_WIDTH_SCALE).max(1.0)
+    (font_size * CELL_WIDTH_SCALE).round().max(1.0)
 }
 
 fn terminal_line_height(font_size: f32) -> f32 {
-    (font_size * LINE_HEIGHT_SCALE).max(1.0)
+    (font_size * LINE_HEIGHT_SCALE).round().max(1.0)
 }
 
 #[cfg(test)]
@@ -470,5 +1052,133 @@ mod tests {
             handle_keyboard_input(input),
             Some(KeyboardAction::ZoomIn)
         ));
+    }
+
+    #[test]
+    fn renders_lower_half_block_as_rect_not_text() {
+        let mut screen = TerminalScreen::new(PtySize { cols: 1, rows: 1 });
+        screen.replace(
+            PtySize { cols: 1, rows: 1 },
+            vec![TerminalCell::new(
+                '▄',
+                Some(TerminalColor { r: 1, g: 2, b: 3 }),
+                Some(TerminalColor { r: 4, g: 5, b: 6 }),
+            )],
+        );
+
+        let frame = render_pty_screen(&screen, DEFAULT_TERMINAL_FONT_SIZE);
+
+        assert!(frame.commands().iter().any(|command| {
+            matches!(
+                command,
+                RenderCommand::FillRect { color, .. }
+                    if *color == Color { r: 1, g: 2, b: 3, a: 255 }
+            )
+        }));
+        assert!(!frame.commands().iter().any(
+            |command| matches!(command, RenderCommand::Text { content, .. } if content == "▄")
+        ));
+    }
+
+    #[test]
+    fn renders_sextant_as_rect_not_text() {
+        let mut screen = TerminalScreen::new(PtySize { cols: 1, rows: 1 });
+        screen.replace(
+            PtySize { cols: 1, rows: 1 },
+            vec![TerminalCell::new(
+                '\u{1fb00}',
+                Some(TerminalColor { r: 1, g: 2, b: 3 }),
+                None,
+            )],
+        );
+
+        let frame = render_pty_screen(&screen, DEFAULT_TERMINAL_FONT_SIZE);
+
+        assert!(frame.commands().iter().any(|command| {
+            matches!(
+                command,
+                RenderCommand::FillRect { color, .. }
+                    if *color == Color { r: 1, g: 2, b: 3, a: 255 }
+            )
+        }));
+        assert!(!frame.commands().iter().any(
+            |command| matches!(command, RenderCommand::Text { content, .. } if content == "\u{1fb00}")
+        ));
+    }
+
+    #[test]
+    fn renders_shade_block_as_rect_not_text() {
+        let mut screen = TerminalScreen::new(PtySize { cols: 1, rows: 1 });
+        screen.replace(
+            PtySize { cols: 1, rows: 1 },
+            vec![TerminalCell::new(
+                '▒',
+                Some(TerminalColor { r: 1, g: 2, b: 3 }),
+                Some(TerminalColor { r: 4, g: 5, b: 6 }),
+            )],
+        );
+
+        let frame = render_pty_screen(&screen, DEFAULT_TERMINAL_FONT_SIZE);
+
+        assert!(frame.commands().iter().any(|command| {
+            matches!(
+                command,
+                RenderCommand::FillRect { color, .. }
+                    if *color == Color { r: 1, g: 2, b: 3, a: 128 }
+            )
+        }));
+        assert!(!frame.commands().iter().any(
+            |command| matches!(command, RenderCommand::Text { content, .. } if content == "▒")
+        ));
+    }
+
+    #[test]
+    fn renders_legacy_upper_block_as_rect_not_text() {
+        let mut screen = TerminalScreen::new(PtySize { cols: 1, rows: 1 });
+        screen.replace(
+            PtySize { cols: 1, rows: 1 },
+            vec![TerminalCell::new(
+                '\u{1fb83}',
+                Some(TerminalColor { r: 1, g: 2, b: 3 }),
+                Some(TerminalColor { r: 4, g: 5, b: 6 }),
+            )],
+        );
+
+        let frame = render_pty_screen(&screen, DEFAULT_TERMINAL_FONT_SIZE);
+
+        assert!(frame.commands().iter().any(|command| {
+            matches!(
+                command,
+                RenderCommand::FillRect { color, .. }
+                    if *color == Color { r: 1, g: 2, b: 3, a: 255 }
+            )
+        }));
+        assert!(!frame.commands().iter().any(
+            |command| matches!(command, RenderCommand::Text { content, .. } if content == "\u{1fb83}")
+        ));
+    }
+
+    #[test]
+    fn wide_character_text_includes_continuation_width() {
+        let mut screen = TerminalScreen::new(PtySize { cols: 2, rows: 1 });
+        let foreground = Some(TerminalColor { r: 1, g: 2, b: 3 });
+        screen.replace(
+            PtySize { cols: 2, rows: 1 },
+            vec![
+                TerminalCell::new('中', foreground, None),
+                TerminalCell::continuation(foreground, None),
+            ],
+        );
+
+        let frame = render_pty_screen(&screen, DEFAULT_TERMINAL_FONT_SIZE);
+        let expected_width = terminal_cell_width(DEFAULT_TERMINAL_FONT_SIZE) * 2.0;
+
+        assert!(frame.commands().iter().any(|command| {
+            matches!(
+                command,
+                RenderCommand::Text { content, width, .. }
+                    if content == "中" && (*width - expected_width).abs() < f32::EPSILON
+            )
+        }));
     }
 }

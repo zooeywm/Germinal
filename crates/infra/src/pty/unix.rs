@@ -12,6 +12,7 @@ use rustix_openpty::{login_tty, openpty};
 
 const DEFAULT_PTY_COLS: u16 = 80;
 const DEFAULT_PTY_ROWS: u16 = 24;
+const PTY_READ_BUFFER_SIZE: usize = 64 * 1024;
 
 use compio::buf::BufResult;
 use compio::io::{AsyncRead, AsyncWrite};
@@ -273,7 +274,7 @@ async fn write_pty_controller(
 }
 
 async fn read_pty_controller(pty_controller: &mut AsyncFd<OwnedFd>) -> PtyResult<Vec<u8>> {
-    let buffer = vec![0; 4096];
+    let buffer = vec![0; PTY_READ_BUFFER_SIZE];
     let BufResult(result, mut buffer) = pty_controller.read(buffer).await;
 
     let read_len = result.map_err(|_| PtyError::IoFailed)?;

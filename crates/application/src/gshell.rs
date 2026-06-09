@@ -219,11 +219,11 @@ where
 }
 
 fn terminal_cell_width(font_size: f32) -> f32 {
-    (font_size * TERMINAL_CELL_WIDTH_SCALE).max(1.0)
+    (font_size * TERMINAL_CELL_WIDTH_SCALE).round().max(1.0)
 }
 
 fn terminal_line_height(font_size: f32) -> f32 {
-    (font_size * TERMINAL_LINE_HEIGHT_SCALE).max(1.0)
+    (font_size * TERMINAL_LINE_HEIGHT_SCALE).round().max(1.0)
 }
 
 impl<Deps> GShellService<Deps>
@@ -365,8 +365,8 @@ pub fn terminal_size(size: PtySize, font_size: f32) -> TerminalSize {
     TerminalSize {
         cols: size.cols,
         rows: size.rows,
-        cell_width: terminal_cell_width(font_size).round().max(1.0) as u16,
-        cell_height: terminal_line_height(font_size).round().max(1.0) as u16,
+        cell_width: terminal_cell_width(font_size) as u16,
+        cell_height: terminal_line_height(font_size) as u16,
     }
 }
 

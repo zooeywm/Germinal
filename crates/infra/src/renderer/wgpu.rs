@@ -5,7 +5,6 @@ use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Wrap, fontdb,
 };
-use wgpu::util::DeviceExt;
 
 const TEXT_SIZE: f32 = 15.0;
 const LINE_HEIGHT: f32 = 16.0;
@@ -21,10 +20,14 @@ pub struct WgpuRendererBackend {
     viewport: Viewport,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
-    terminal_font_family: String,
     rect_vertices: Vec<RectVertex>,
+    rect_vertex_buffer: Option<wgpu::Buffer>,
+    rect_vertex_capacity: usize,
 
     text_cache: Vec<CachedTextItem>,
+    cjk_font_family: Option<String>,
+    symbol_font_family: Option<String>,
+    complex_font_family: Option<String>,
 }
 
 struct CachedTextItem {
@@ -37,6 +40,7 @@ struct TextCacheKey {
     width: u32,
     height: u32,
     font_size: u32,
+    style: TextStyle,
     content: String,
 }
 
@@ -46,9 +50,18 @@ impl TextCacheKey {
             width: item.width.to_bits(),
             height: item.height.to_bits(),
             font_size: item.font_size.to_bits(),
+            style: item.style,
             content: item.content.clone(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextStyle {
+    MonospaceBasic,
+    CjkBasic,
+    SymbolBasic,
+    Advanced,
 }
 
 struct TextItem {
@@ -57,6 +70,7 @@ struct TextItem {
     width: f32,
     height: f32,
     font_size: f32,
+    style: TextStyle,
     content: String,
     color: RenderColor,
 }
@@ -156,6 +170,24 @@ impl WgpuRendererBackend {
 
         let mut font_system = FontSystem::new();
         let terminal_font_family = terminal_font_family(&font_system);
+        let cjk_font_family = first_available_font_family(
+            &font_system,
+            &[
+                "Noto Sans Mono CJK SC",
+                "Noto Sans CJK SC",
+                "Noto Sans Mono CJK JP",
+                "Noto Sans CJK JP",
+            ],
+        );
+        let symbol_font_family = first_available_font_family(
+            &font_system,
+            &[
+                "Noto Sans Symbols2",
+                "Noto Sans Symbols 2",
+                "Noto Sans Symbols",
+            ],
+        );
+        let complex_font_family = first_available_font_family(&font_system, &["Noto Sans"]);
         font_system
             .db_mut()
             .set_monospace_family(terminal_font_family.clone());
@@ -182,9 +214,13 @@ impl WgpuRendererBackend {
             viewport,
             text_atlas,
             text_renderer,
-            terminal_font_family,
             rect_vertices: Vec::new(),
+            rect_vertex_buffer: None,
+            rect_vertex_capacity: 0,
             text_cache: Vec::new(),
+            cjk_font_family,
+            symbol_font_family,
+            complex_font_family,
         }
     }
 
@@ -216,18 +252,7 @@ impl WgpuRendererBackend {
         };
         self.prepare_text_cache(text_items);
         let should_render_text = self.prepare_text_renderer(text_items);
-        let rect_vertex_buffer = if self.rect_vertices.is_empty() {
-            None
-        } else {
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Germinal Rect Vertex Buffer"),
-                        contents: rect_vertex_bytes(&self.rect_vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-            )
-        };
+        self.update_rect_vertex_buffer();
 
         let surface_view = surface_frame
             .texture
@@ -254,7 +279,7 @@ impl WgpuRendererBackend {
                 ..Default::default()
             });
 
-            if let Some(buffer) = &rect_vertex_buffer {
+            if let Some(buffer) = &self.rect_vertex_buffer {
                 pass.set_pipeline(&self.rect_pipeline);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..self.rect_vertices.len() as u32, 0..1);
@@ -271,6 +296,27 @@ impl WgpuRendererBackend {
 
         self.queue.submit(Some(encoder.finish()));
         surface_frame.present();
+    }
+
+    fn update_rect_vertex_buffer(&mut self) {
+        if self.rect_vertices.is_empty() {
+            return;
+        }
+
+        if self.rect_vertices.len() > self.rect_vertex_capacity {
+            self.rect_vertex_capacity = self.rect_vertices.len().next_power_of_two();
+            self.rect_vertex_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Germinal Rect Vertex Buffer"),
+                size: (self.rect_vertex_capacity * size_of::<RectVertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+
+        if let Some(buffer) = &self.rect_vertex_buffer {
+            self.queue
+                .write_buffer(buffer, 0, rect_vertex_bytes(&self.rect_vertices));
+        }
     }
 
     fn prepare_text_cache(&mut self, text_items: &[TextItem]) {
@@ -320,17 +366,68 @@ impl WgpuRendererBackend {
             Some(item.height.max(line_height)),
         );
 
-        buffer.set_text(
-            &mut self.font_system,
-            &item.content,
-            &Attrs::new().family(Family::Name(&self.terminal_font_family)),
-            Shaping::Basic,
-            None,
-        );
+        match item.style {
+            TextStyle::CjkBasic => {
+                if let Some(family) = &self.cjk_font_family {
+                    buffer.set_text(
+                        &mut self.font_system,
+                        &item.content,
+                        &Attrs::new().family(Family::Name(family)),
+                        Shaping::Basic,
+                        None,
+                    );
+                } else {
+                    self.set_advanced_text(&mut buffer, item);
+                }
+            }
+            TextStyle::SymbolBasic => {
+                if let Some(family) = &self.symbol_font_family {
+                    buffer.set_text(
+                        &mut self.font_system,
+                        &item.content,
+                        &Attrs::new().family(Family::Name(family)),
+                        Shaping::Basic,
+                        None,
+                    );
+                } else {
+                    self.set_advanced_text(&mut buffer, item);
+                }
+            }
+            TextStyle::Advanced => self.set_advanced_text(&mut buffer, item),
+            TextStyle::MonospaceBasic => {
+                buffer.set_text(
+                    &mut self.font_system,
+                    &item.content,
+                    &Attrs::new().family(Family::Monospace),
+                    Shaping::Basic,
+                    None,
+                );
+            }
+        }
 
         buffer.shape_until_scroll(&mut self.font_system, false);
 
         buffer
+    }
+
+    fn set_advanced_text(&mut self, buffer: &mut Buffer, item: &TextItem) {
+        if let Some(family) = &self.complex_font_family {
+            buffer.set_text(
+                &mut self.font_system,
+                &item.content,
+                &Attrs::new().family(Family::Name(family)),
+                Shaping::Advanced,
+                None,
+            );
+        } else {
+            buffer.set_text(
+                &mut self.font_system,
+                &item.content,
+                &Attrs::new().family(Family::Monospace),
+                Shaping::Advanced,
+                None,
+            );
+        }
     }
 
     fn prepare_text_renderer(&mut self, text_items: &[TextItem]) -> bool {
@@ -417,15 +514,9 @@ impl WgpuRendererBackend {
                     content,
                     color,
                 } => {
-                    text_items.push(TextItem {
-                        x: *x,
-                        y: *y,
-                        width: *width,
-                        height: *height,
-                        font_size: *font_size,
-                        content: content.clone(),
-                        color: *color,
-                    });
+                    push_text_items(
+                        text_items, *x, *y, *width, *height, *font_size, content, *color,
+                    );
                 }
             }
         }
@@ -444,6 +535,133 @@ impl RendererPort for WgpuRendererBackend {
         let clear_color = self.prepare_frame(frame, &mut text_items);
         self.present_frame(clear_color, &text_items);
     }
+}
+
+fn push_text_items(
+    text_items: &mut Vec<TextItem>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    font_size: f32,
+    content: &str,
+    color: RenderColor,
+) {
+    let cell_width = terminal_cell_width(font_size);
+    let mut run_style = None;
+    let mut run_content = String::new();
+    let mut run_x = x;
+    let mut run_width = 0.0;
+    let mut cursor_x = x;
+
+    for ch in content.chars() {
+        let style = text_style(ch);
+        let ch_width = char_cell_width(ch) as f32 * cell_width;
+
+        if run_style.is_some_and(|current| current != style) {
+            text_items.push(TextItem {
+                x: run_x,
+                y,
+                width: run_width,
+                height,
+                font_size,
+                style: run_style.expect("run_style is set when flushing"),
+                content: std::mem::take(&mut run_content),
+                color,
+            });
+
+            run_x = cursor_x;
+            run_width = 0.0;
+        }
+
+        run_style = Some(style);
+        run_content.push(ch);
+        run_width += ch_width;
+        cursor_x += ch_width;
+    }
+
+    if let Some(style) = run_style {
+        text_items.push(TextItem {
+            x: run_x,
+            y,
+            width: run_width.min(width),
+            height,
+            font_size,
+            style,
+            content: run_content,
+            color,
+        });
+    }
+}
+
+fn text_style(ch: char) -> TextStyle {
+    if requires_advanced_shaping(ch) {
+        TextStyle::Advanced
+    } else if is_cjk_char(ch) {
+        TextStyle::CjkBasic
+    } else if is_symbol_font_char(ch) {
+        TextStyle::SymbolBasic
+    } else {
+        TextStyle::MonospaceBasic
+    }
+}
+
+fn char_cell_width(ch: char) -> u8 {
+    if is_wide_cell_char(ch) { 2 } else { 1 }
+}
+
+fn is_wide_cell_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x115f
+            | 0x2329..=0x232a
+            | 0x2e80..=0xa4cf
+            | 0xac00..=0xd7a3
+            | 0xf900..=0xfaff
+            | 0xfe10..=0xfe19
+            | 0xfe30..=0xfe6f
+            | 0xff00..=0xff60
+            | 0xffe0..=0xffe6
+            | 0x1f300..=0x1faff
+            | 0x20000..=0x3fffd
+    )
+}
+
+fn is_cjk_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x11ff
+            | 0x2e80..=0xa4cf
+            | 0xac00..=0xd7af
+            | 0xf900..=0xfaff
+            | 0xff00..=0xffef
+            | 0x20000..=0x3fffd
+    )
+}
+
+fn is_symbol_font_char(ch: char) -> bool {
+    if matches!(ch as u32, 0x2500..=0x257f) {
+        return false;
+    }
+
+    matches!(
+        ch as u32,
+        0x2190..=0x27ff | 0x2900..=0x2bff | 0x1f000..=0x1faff
+    )
+}
+
+fn requires_advanced_shaping(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0590..=0x08ff
+            | 0x0900..=0x0dff
+            | 0x0e00..=0x0eff
+            | 0x0f00..=0x109f
+            | 0x1780..=0x18af
+            | 0xa800..=0xabff
+            | 0xfb50..=0xfdff
+            | 0xfe70..=0xfeff
+    )
 }
 
 fn glyph_color(color: RenderColor) -> GlyphColor {
@@ -473,10 +691,12 @@ fn push_rect_vertices(
         return;
     }
 
-    let left = clip_x(x, surface_width);
-    let right = clip_x(x + width, surface_width);
-    let top = clip_y(y, surface_height);
-    let bottom = clip_y(y + height, surface_height);
+    let (left_px, right_px) = snapped_span(x, x + width);
+    let (top_px, bottom_px) = snapped_span(y, y + height);
+    let left = clip_x(left_px, surface_width);
+    let right = clip_x(right_px, surface_width);
+    let top = clip_y(top_px, surface_height);
+    let bottom = clip_y(bottom_px, surface_height);
     let color = [
         color.r as f32 / 255.0,
         color.g as f32 / 255.0,
@@ -512,6 +732,17 @@ fn push_rect_vertices(
     ]);
 }
 
+fn snapped_span(start: f32, end: f32) -> (f32, f32) {
+    let start = start.round();
+    let mut end = end.round();
+
+    if end <= start {
+        end = start + 1.0;
+    }
+
+    (start, end)
+}
+
 fn clip_x(x: f32, surface_width: f32) -> f32 {
     ((x / surface_width) * 2.0 - 1.0).clamp(-1.0, 1.0)
 }
@@ -530,11 +761,11 @@ fn rect_vertex_bytes(vertices: &[RectVertex]) -> &[u8] {
 }
 
 fn terminal_line_height(font_size: f32) -> f32 {
-    (font_size * LINE_HEIGHT / TEXT_SIZE).max(1.0)
+    (font_size * LINE_HEIGHT / TEXT_SIZE).round().max(1.0)
 }
 
 fn terminal_cell_width(font_size: f32) -> f32 {
-    (font_size * 0.62).max(1.0)
+    (font_size * 0.62).round().max(1.0)
 }
 
 fn terminal_font_family(font_system: &FontSystem) -> String {
@@ -568,6 +799,13 @@ fn terminal_font_family(font_system: &FontSystem) -> String {
         .to_string()
 }
 
+fn first_available_font_family(font_system: &FontSystem, families: &[&str]) -> Option<String> {
+    families
+        .iter()
+        .find(|family| has_font_family(font_system, family))
+        .map(|family| (*family).to_string())
+}
+
 fn has_font_family(font_system: &FontSystem, family: &str) -> bool {
     font_system
         .db()
@@ -597,3 +835,22 @@ fn fs_rect(input: VertexOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn box_drawing_uses_monospace_text_style() {
+        assert_eq!(text_style('─'), TextStyle::MonospaceBasic);
+        assert_eq!(text_style('│'), TextStyle::MonospaceBasic);
+        assert_eq!(text_style('╭'), TextStyle::MonospaceBasic);
+    }
+
+    #[test]
+    fn block_elements_use_symbol_text_style() {
+        assert_eq!(text_style('░'), TextStyle::SymbolBasic);
+        assert_eq!(text_style('▒'), TextStyle::SymbolBasic);
+        assert_eq!(text_style('▓'), TextStyle::SymbolBasic);
+    }
+}

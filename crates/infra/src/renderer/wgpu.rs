@@ -23,6 +23,32 @@ pub struct WgpuRendererBackend {
     text_renderer: TextRenderer,
     terminal_font_family: String,
     rect_vertices: Vec<RectVertex>,
+
+    text_cache: Vec<CachedTextItem>,
+}
+
+struct CachedTextItem {
+    key: TextCacheKey,
+    buffer: Buffer,
+}
+
+#[derive(PartialEq, Eq)]
+struct TextCacheKey {
+    width: u32,
+    height: u32,
+    font_size: u32,
+    content: String,
+}
+
+impl TextCacheKey {
+    fn from_item(item: &TextItem) -> Self {
+        Self {
+            width: item.width.to_bits(),
+            height: item.height.to_bits(),
+            font_size: item.font_size.to_bits(),
+            content: item.content.clone(),
+        }
+    }
 }
 
 struct TextItem {
@@ -158,6 +184,7 @@ impl WgpuRendererBackend {
             text_renderer,
             terminal_font_family,
             rect_vertices: Vec::new(),
+            text_cache: Vec::new(),
         }
     }
 
@@ -187,8 +214,8 @@ impl WgpuRendererBackend {
                 return;
             }
         };
-        let text_buffers = self.prepare_text(text_items);
-        let should_render_text = self.prepare_text_renderer(text_items, &text_buffers);
+        self.prepare_text_cache(text_items);
+        let should_render_text = self.prepare_text_renderer(text_items);
         let rect_vertex_buffer = if self.rect_vertices.is_empty() {
             None
         } else {
@@ -246,7 +273,7 @@ impl WgpuRendererBackend {
         surface_frame.present();
     }
 
-    fn prepare_text(&mut self, text_items: &[TextItem]) -> Vec<Buffer> {
+    fn prepare_text_cache(&mut self, text_items: &[TextItem]) {
         self.viewport.update(
             &self.queue,
             Resolution {
@@ -255,49 +282,67 @@ impl WgpuRendererBackend {
             },
         );
 
-        let mut buffers = Vec::with_capacity(text_items.len());
+        let mut old_cache = std::mem::take(&mut self.text_cache);
+        let mut new_cache = Vec::with_capacity(text_items.len());
 
         for item in text_items {
-            let line_height = terminal_line_height(item.font_size);
-            let mut buffer = Buffer::new(
-                &mut self.font_system,
-                Metrics::new(item.font_size, line_height),
-            );
-            buffer.set_monospace_width(
-                &mut self.font_system,
-                Some(terminal_cell_width(item.font_size)),
-            );
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(item.width.max(0.0)),
-                Some(item.height.max(line_height)),
-            );
+            let key = TextCacheKey::from_item(item);
 
-            buffer.set_text(
-                &mut self.font_system,
-                &item.content,
-                &Attrs::new().family(Family::Name(&self.terminal_font_family)),
-                Shaping::Basic,
-                None,
-            );
-            buffer.shape_until_scroll(&mut self.font_system, false);
-            buffers.push(buffer);
+            if let Some(index) = old_cache.iter().position(|cached| cached.key == key) {
+                new_cache.push(old_cache.swap_remove(index));
+            } else {
+                let buffer = self.create_text_buffer(item);
+                new_cache.push(CachedTextItem { key, buffer });
+            }
         }
 
-        buffers
+        self.text_cache = new_cache;
     }
 
-    fn prepare_text_renderer(&mut self, text_items: &[TextItem], text_buffers: &[Buffer]) -> bool {
-        if text_buffers.is_empty() {
+    fn create_text_buffer(&mut self, item: &TextItem) -> Buffer {
+        let line_height = terminal_line_height(item.font_size);
+
+        let mut buffer = Buffer::new(
+            &mut self.font_system,
+            Metrics::new(item.font_size, line_height),
+        );
+
+        buffer.set_monospace_width(
+            &mut self.font_system,
+            Some(terminal_cell_width(item.font_size)),
+        );
+
+        buffer.set_wrap(&mut self.font_system, Wrap::None);
+
+        buffer.set_size(
+            &mut self.font_system,
+            Some(item.width.max(0.0)),
+            Some(item.height.max(line_height)),
+        );
+
+        buffer.set_text(
+            &mut self.font_system,
+            &item.content,
+            &Attrs::new().family(Family::Name(&self.terminal_font_family)),
+            Shaping::Basic,
+            None,
+        );
+
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        buffer
+    }
+
+    fn prepare_text_renderer(&mut self, text_items: &[TextItem]) -> bool {
+        if self.text_cache.is_empty() {
             return false;
         }
 
         let text_areas = text_items
             .iter()
-            .zip(text_buffers.iter())
-            .map(|(item, buffer)| TextArea {
-                buffer,
+            .zip(self.text_cache.iter())
+            .map(|(item, cached)| TextArea {
+                buffer: &cached.buffer,
                 left: item.x,
                 top: item.y,
                 scale: 1.0,

@@ -14,7 +14,7 @@ use germinal_infra::{
 };
 use germinal_ports::{pty::PtyResult, window::WindowEventProxy};
 
-use crate::container::GerminalApp;
+use crate::app_deps::AppDeps;
 
 pub struct RuntimeEffectExecutor {
     write_queue: Rc<RefCell<PtyWriteQueue>>,
@@ -85,7 +85,7 @@ impl RuntimeEffectExecutor {
         self.start_pty_tasks();
     }
 
-    pub fn apply(&mut self, app: &mut GerminalApp, effects: Vec<RuntimeEffect>) {
+    pub fn apply(&mut self, app: &mut AppDeps, effects: Vec<RuntimeEffect>) {
         for effect in effects {
             match effect {
                 RuntimeEffect::WritePty { id, bytes } => {

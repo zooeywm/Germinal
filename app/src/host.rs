@@ -10,10 +10,10 @@ use germinal_ports::window::{
     WindowControlFlow, WindowEvent, WindowEventHandler, WindowEventProxy, WindowEventResult,
 };
 
-use crate::{container::GerminalApp, effects::RuntimeEffectExecutor};
+use crate::{app_deps::AppDeps, effects::RuntimeEffectExecutor};
 
 pub struct GerminalRuntimeHost {
-    app: GerminalApp,
+    deps: AppDeps,
     effect_executor: RuntimeEffectExecutor,
     pending_pty_output: HashMap<GShellId, Vec<u8>>,
     pending_frame: Option<RenderFrame>,
@@ -23,12 +23,11 @@ pub struct GerminalRuntimeHost {
 }
 
 impl GerminalRuntimeHost {
-    pub fn new() -> Self {
-        let app = GerminalApp::new();
-        let initial_id = <GerminalApp as AsRef<GShellServiceState>>::as_ref(&app).active();
+    pub fn new(deps: AppDeps) -> Self {
+        let initial_id = <AppDeps as AsRef<GShellServiceState>>::as_ref(&deps).active();
 
         Self {
-            app,
+            deps,
             effect_executor: RuntimeEffectExecutor::new(initial_id)
                 .expect("failed to create RuntimeEffectExecutor"),
             pending_pty_output: HashMap::new(),
@@ -40,13 +39,13 @@ impl GerminalRuntimeHost {
     }
 
     fn update_window_event(&mut self, event: WindowEvent) -> RuntimeEventResult {
-        let runtime = GerminalRuntime::inj_ref_mut(&mut self.app);
+        let runtime = GerminalRuntime::inj_ref_mut(&mut self.deps);
         runtime.handle_window_event(event)
     }
 
     fn update_pty_output(&mut self, id: GShellId, bytes: Vec<u8>) -> Option<RuntimeEventResult> {
         let event = {
-            let gshell_service = GShellService::inj_ref_mut(&mut self.app);
+            let gshell_service = GShellService::inj_ref_mut(&mut self.deps);
 
             match gshell_service.handle_pty_output_bytes(id, bytes) {
                 Ok(event) => event,
@@ -57,7 +56,7 @@ impl GerminalRuntimeHost {
             }
         };
 
-        let runtime = GerminalRuntime::inj_ref_mut(&mut self.app);
+        let runtime = GerminalRuntime::inj_ref_mut(&mut self.deps);
 
         match runtime.handle_event(RuntimeEvent::Pty(event)) {
             Ok(result) => Some(result),
@@ -119,7 +118,7 @@ impl GerminalRuntimeHost {
             effects,
         } = result;
 
-        self.effect_executor.apply(&mut self.app, effects);
+        self.effect_executor.apply(&mut self.deps, effects);
 
         match control_flow {
             RuntimeControlFlow::Continue => {
@@ -148,12 +147,6 @@ impl GerminalRuntimeHost {
                 WindowEventResult::exit()
             }
         }
-    }
-}
-
-impl Default for GerminalRuntimeHost {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

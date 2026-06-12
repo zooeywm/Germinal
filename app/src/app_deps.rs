@@ -1,10 +1,8 @@
 use germinal_application::gshell::GShellServiceState;
 use germinal_domain::gshell::GShellId;
-use germinal_domain::rendering::RenderFrame;
-use germinal_infra::{renderer::FakeRenderer, terminal::AlacrittyTerminalEngine};
+use germinal_infra::terminal::AlacrittyTerminalEngine;
 use germinal_ports::{
     pty::PtyResult,
-    renderer::RendererPort,
     terminal::{TerminalEnginePort, TerminalScreen, TerminalSize, TerminalUpdate},
 };
 
@@ -15,13 +13,12 @@ const DEFAULT_TERMINAL_SIZE: TerminalSize = TerminalSize {
     cell_height: 18,
 };
 
-pub struct GerminalApp {
-    renderer_backend: FakeRenderer,
+pub struct AppDeps {
     terminal_engine: AlacrittyTerminalEngine,
     gshell_service_state: GShellServiceState,
 }
 
-impl GerminalApp {
+impl AppDeps {
     pub fn new() -> Self {
         let gshell_service_state = GShellServiceState::new();
         let terminal_engine =
@@ -29,32 +26,31 @@ impl GerminalApp {
                 .expect("failed to create terminal engine");
 
         Self {
-            renderer_backend: FakeRenderer,
             terminal_engine,
             gshell_service_state,
         }
     }
 }
 
-impl RendererPort for GerminalApp {
-    fn render(&mut self, frame: &RenderFrame) {
-        self.renderer_backend.render(frame);
+impl Default for AppDeps {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl AsRef<GShellServiceState> for GerminalApp {
+impl AsRef<GShellServiceState> for AppDeps {
     fn as_ref(&self) -> &GShellServiceState {
         &self.gshell_service_state
     }
 }
 
-impl AsMut<GShellServiceState> for GerminalApp {
+impl AsMut<GShellServiceState> for AppDeps {
     fn as_mut(&mut self) -> &mut GShellServiceState {
         &mut self.gshell_service_state
     }
 }
 
-impl TerminalEnginePort for GerminalApp {
+impl TerminalEnginePort for AppDeps {
     fn create_terminal(&mut self, id: GShellId, size: TerminalSize) -> PtyResult<()> {
         self.terminal_engine.create_terminal(id, size)
     }

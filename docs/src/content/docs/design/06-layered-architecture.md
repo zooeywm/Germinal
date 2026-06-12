@@ -378,11 +378,8 @@ main.rs
 
 ```rust
 fn main() -> anyhow::Result<()> {
-    let renderer = WgpuRenderer::new()?;
-    let pty = SystemPty::new()?;
-    let window = WinitWindowSystem::new()?;
-
-    let app = GerminalApp::new(renderer, pty, window);
+    let deps = AppDeps::new();
+    let app = GerminalWindowApp::new(GerminalRuntimeHost::new(deps));
 
     app.run()?;
 
